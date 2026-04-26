@@ -10,6 +10,7 @@ import { pool, logEvent } from './db.js';
 
 function randomId(bytes = 6) { return crypto.randomBytes(bytes).toString('hex'); }
 function randomToken() { return crypto.randomBytes(32).toString('base64url'); }
+function sha256(buf) { return crypto.createHash('sha256').update(buf).digest(); }
 function normalizeUsername(u) {
   return String(u || '').trim().toLowerCase().replace(/[^a-z0-9_.-]/g, '');
 }
@@ -41,10 +42,36 @@ export class UserRegistry {
 
   async loginByToken(token) {
     if (!token) return null;
-    const { rows } = await pool.query(
+    const direct = await pool.query(
       `SELECT id, username, display_name AS "displayName" FROM users WHERE token = $1`,
       [token],
     );
+    if (direct.rows[0]) return direct.rows[0];
+
+    let raw;
+    try {
+      raw = Buffer.from(String(token), 'base64url');
+    } catch {
+      return null;
+    }
+
+    const { rows } = await pool.query(
+      `SELECT u.id, u.username, u.display_name AS "displayName"
+         FROM auth_credentials ac
+         JOIN users u ON u.id = ac.user_id
+        WHERE ac.credential_type = 'session'
+          AND ac.token_hash = $1
+          AND (ac.expires_at IS NULL OR ac.expires_at > now())
+        ORDER BY ac.created_at DESC
+        LIMIT 1`,
+      [sha256(raw)],
+    );
+    if (rows[0]) {
+      await pool.query(
+        `UPDATE auth_credentials SET last_used_at = now() WHERE credential_type = 'session' AND token_hash = $1`,
+        [sha256(raw)],
+      ).catch(() => {});
+    }
     return rows[0] || null;
   }
 

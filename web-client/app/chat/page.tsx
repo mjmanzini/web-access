@@ -98,7 +98,7 @@ export default function ChatPage() {
       setThreads((prev) => {
         const list = prev[m.conversationId] ?? [];
         const idx = m.clientId ? list.findIndex((x) => x.clientId === m.clientId) : -1;
-        const next = idx >= 0
+        const next: ChatMessage[] = idx >= 0
           ? list.map((x, i) => (i === idx ? { ...m, status: x.status === 'read' ? 'read' : 'sent' } : x))
           : [...list, m];
         return { ...prev, [m.conversationId]: next };
@@ -121,7 +121,7 @@ export default function ChatPage() {
     const offRcpt = cc.onReceipt(({ messageId, userId, kind }) => {
       if (userId === me.id) return;
       setThreads((prev) => {
-        const out: typeof prev = {};
+        const out: Record<string, ChatMessage[]> = {};
         for (const [cid, msgs] of Object.entries(prev)) {
           out[cid] = msgs.map((m) => m.id === messageId
             ? { ...m, status: kind === 'read' ? 'read' : (m.status === 'read' ? 'read' : 'delivered') }

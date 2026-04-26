@@ -1,9 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { webauthn } from '../../lib/auth/webauthn-client';
-import { api, saveStoredUser, type StoredUser } from '../../lib/user-session';
+import { api, loginWithToken, saveStoredUser, type StoredUser } from '../../lib/user-session';
 
 /**
  * Frictionless 2-step onboarding:
@@ -18,20 +18,23 @@ export default function OnboardingPage() {
   const [contact, setContact] = useState(''); // email or phone
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [biomWanted, setBiomWanted] = useState(false);
   const [biomDone, setBiomDone] = useState(false);
   const [biomSupported, setBiomSupported] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    Promise.all([webauthn.isSupported(), webauthn.hasPlatformAuthenticator()])
+      .then(([supported, platform]) => setBiomSupported(supported && platform))
+      .catch(() => setBiomSupported(false));
+  }, []);
 
   const next = () => {
     setErr(null);
     if (step === 1) {
       if (name.trim().length < 2) return setErr('Please enter your name.');
       setStep(2);
-      // probe biometric availability for the next pane
-      Promise.all([webauthn.isSupported(), webauthn.hasPlatformAuthenticator()])
-        .then(([s, p]) => setBiomSupported(s && p))
-        .catch(() => setBiomSupported(false));
     } else {
-      finish();
+      void finish();
     }
   };
 
@@ -51,6 +54,10 @@ export default function OnboardingPage() {
         }),
       });
       saveStoredUser(u);
+      if (biomWanted && biomSupported) {
+        await webauthn.register('This device');
+        setBiomDone(true);
+      }
       router.push('/chat');
     } catch (e) {
       setErr((e as Error).message ?? 'Registration failed');
@@ -60,12 +67,20 @@ export default function OnboardingPage() {
   };
 
   const setupBiometrics = async () => {
-    setErr(null); setBusy(true);
+    setBiomWanted((current) => !current);
+    setBiomDone(false);
+  };
+
+  const signInWithPasskey = async () => {
+    setErr(null);
+    setBusy(true);
     try {
-      await webauthn.register('This device');
-      setBiomDone(true);
+      const result = await webauthn.authenticate();
+      const user = await loginWithToken(result.token);
+      if (!user) throw new Error('passkey_login_failed');
+      router.push('/chat');
     } catch (e) {
-      setErr('Could not register passkey: ' + (e as Error).message);
+      setErr('Could not sign in with passkey: ' + (e as Error).message);
     } finally {
       setBusy(false);
     }
@@ -83,6 +98,20 @@ export default function OnboardingPage() {
           <>
             <h1>Welcome 👋</h1>
             <p className="sub">What should we call you?</p>
+            {biomSupported && (
+              <button
+                type="button"
+                onClick={signInWithPasskey}
+                disabled={busy}
+                style={{
+                  width: '100%', height: 42, borderRadius: 8, marginBottom: 14,
+                  background: 'transparent', border: '1px solid var(--wa-line)', color: 'var(--wa-text)',
+                  fontWeight: 600,
+                }}
+              >
+                Sign in with passkey
+              </button>
+            )}
             <label htmlFor="n">Name</label>
             <input id="n" autoFocus value={name} onChange={(e) => setName(e.target.value)}
                    onKeyDown={(e) => { if (e.key === 'Enter') next(); }}
@@ -108,10 +137,11 @@ export default function OnboardingPage() {
                   disabled={busy}
                   style={{
                     marginTop: 10, padding: '8px 14px', borderRadius: 6,
-                    background: 'var(--wa-accent)', color: '#fff', fontWeight: 600,
+                    background: biomWanted ? 'var(--wa-surface)' : 'var(--wa-accent)',
+                    color: biomWanted ? 'var(--wa-text)' : '#fff', fontWeight: 600,
                   }}
                 >
-                  Set up biometrics
+                  {biomWanted ? 'Passkey will be added after finish' : 'Set up biometrics'}
                 </button>
               </div>
             )}

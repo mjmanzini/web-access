@@ -85,6 +85,14 @@ export async function verifyToken(token: string): Promise<{ id: string; username
   }
 }
 
+export async function loginWithToken(token: string): Promise<StoredUser | null> {
+  const user = await verifyToken(token);
+  if (!user) return null;
+  const stored = { ...user, token };
+  saveStoredUser(stored);
+  return stored;
+}
+
 export async function listUsers(): Promise<PublicUser[]> {
   const res = await fetch(`${signalingUrl()}/users`);
   if (!res.ok) return [];

@@ -15,6 +15,18 @@ import {
 
 const API = process.env.NEXT_PUBLIC_API_BASE ?? '';
 
+function authHeaders(): Record<string, string> {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = localStorage.getItem('web-access.user');
+    if (!raw) return {};
+    const user = JSON.parse(raw) as { token?: string };
+    return user?.token ? { authorization: `Bearer ${user.token}` } : {};
+  } catch {
+    return {};
+  }
+}
+
 export const webauthn = {
   isSupported: () => browserSupportsWebAuthn(),
   hasPlatformAuthenticator: () => platformAuthenticatorIsAvailable(),
@@ -28,7 +40,7 @@ export const webauthn = {
     const optsRes = await fetch(`${API}/api/auth/webauthn/register/options`, {
       method: 'POST',
       credentials: 'include',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ deviceLabel }),
     });
     if (!optsRes.ok) throw new Error('webauthn_register_options_failed');
@@ -42,7 +54,7 @@ export const webauthn = {
     const verifyRes = await fetch(`${API}/api/auth/webauthn/register/verify`, {
       method: 'POST',
       credentials: 'include',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ attResp, deviceLabel }),
     });
     const data = await verifyRes.json();
@@ -86,7 +98,7 @@ export const webauthn = {
     const optsRes = await fetch(`${API}/api/auth/webauthn/stepup/options`, {
       method: 'POST',
       credentials: 'include',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ action }),
     });
     if (!optsRes.ok) throw new Error('webauthn_stepup_options_failed');
@@ -95,7 +107,7 @@ export const webauthn = {
     const verifyRes = await fetch(`${API}/api/auth/webauthn/stepup/verify`, {
       method: 'POST',
       credentials: 'include',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ assertion, action }),
     });
     const data = await verifyRes.json();
