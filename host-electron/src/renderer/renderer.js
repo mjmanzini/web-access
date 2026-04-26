@@ -18,6 +18,20 @@ async function fetchIceServers() {
 
 const statusEl = document.getElementById('status');
 const statusDot = document.getElementById('statusDot');
+const tokenDot = document.getElementById('tokenDot');
+const tokenState = document.getElementById('tokenState');
+const modeSwitch = document.getElementById('modeSwitch');
+const remotePanel = document.getElementById('remotePanel');
+const legacyPanel = document.getElementById('legacyPanel');
+const hostTokenInput = document.getElementById('hostToken');
+const saveTokenBtn = document.getElementById('saveToken');
+const generateRemoteBtn = document.getElementById('generateRemote');
+const cancelRemoteBtn = document.getElementById('cancelRemote');
+const copyRemoteIdBtn = document.getElementById('copyRemoteId');
+const copyPinBtn = document.getElementById('copyPin');
+const remoteIdEl = document.getElementById('remoteId');
+const pinEl = document.getElementById('pin');
+const remoteExpiryEl = document.getElementById('remoteExpiry');
 const codeEl = document.getElementById('code');
 const qrImg = document.getElementById('qr');
 const qrEmpty = document.getElementById('qrEmpty');
@@ -56,6 +70,13 @@ let localStream = null;
 let controlChannel = null;
 let currentSession = null;
 let videoSender = null;
+let sessionMode = 'remote';
+let expiryTimer = null;
+
+const STORAGE_KEYS = {
+  mode: 'web-access.host.mode',
+  token: 'web-access.host.token',
+};
 
 // Encoder presets applied on a 'quality' message from the client.
 const QUALITY_PRESETS = {
@@ -71,11 +92,157 @@ function setStatus(msg) {
   console.log('[host]', msg);
 }
 
+function savedToken() {
+  try { return localStorage.getItem(STORAGE_KEYS.token) || ''; } catch { return ''; }
+}
+
+function setSavedToken(token) {
+  try { localStorage.setItem(STORAGE_KEYS.token, token); } catch {}
+}
+
+function setSavedMode(mode) {
+  try { localStorage.setItem(STORAGE_KEYS.mode, mode); } catch {}
+}
+
+function loadSavedMode() {
+  try { return localStorage.getItem(STORAGE_KEYS.mode) || 'remote'; } catch { return 'remote'; }
+}
+
+function maskRemoteId(id) {
+  const digits = String(id || '').replace(/\D/g, '').slice(0, 12);
+  if (!digits) return '——— ——— ———';
+  return digits.replace(/(\d{3})(?=\d)/g, '$1 ').trim();
+}
+
+function setTokenState(ok, text) {
+  if (!tokenDot || !tokenState) return;
+  tokenDot.classList.remove('ok', 'warn', 'err');
+  tokenDot.classList.add(ok ? 'ok' : 'warn');
+  tokenState.textContent = text;
+}
+
+function fmtExpiry(iso) {
+  const remaining = new Date(iso).getTime() - Date.now();
+  if (remaining <= 0) return 'Expired';
+  const minutes = Math.floor(remaining / 60000);
+  const seconds = Math.floor((remaining % 60000) / 1000);
+  return `Expires in ${minutes}:${String(seconds).padStart(2, '0')}`;
+}
+
+function updateRemoteExpiry() {
+  if (!remoteExpiryEl) return;
+  if (!currentSession || currentSession.mode !== 'remote' || !currentSession.expiresAt) {
+    remoteExpiryEl.textContent = 'Generate a one-time PIN to start accepting remote connections.';
+    return;
+  }
+  remoteExpiryEl.textContent = fmtExpiry(currentSession.expiresAt);
+  if (new Date(currentSession.expiresAt).getTime() <= Date.now()) {
+    currentSession = null;
+    remoteIdEl.textContent = maskRemoteId('');
+    pinEl.textContent = '——————';
+    if (expiryTimer) { clearInterval(expiryTimer); expiryTimer = null; }
+    setStatus('remote PIN expired');
+  }
+}
+
+function setMode(mode) {
+  sessionMode = mode;
+  setSavedMode(mode);
+  remotePanel.classList.toggle('hidden', mode !== 'remote');
+  legacyPanel.classList.toggle('hidden', mode !== 'legacy');
+  for (const button of modeSwitch.querySelectorAll('button[data-mode]')) {
+    button.classList.toggle('active', button.dataset.mode === mode);
+  }
+}
+
+async function copyText(value, okLabel) {
+  if (!value) return;
+  try {
+    await navigator.clipboard.writeText(value);
+    setStatus(okLabel);
+  } catch (err) {
+    setStatus(`copy failed: ${err.message}`);
+  }
+}
+
+function teardownPeerConnection() {
+  try { controlChannel?.close(); } catch {}
+  try { pc?.close(); } catch {}
+  controlChannel = null;
+  pc = null;
+  videoSender = null;
+}
+
+function disconnectSignaling() {
+  if (!socket) return;
+  socket.disconnect();
+  socket = null;
+}
+
+async function resetSessionState() {
+  disconnectSignaling();
+  teardownPeerConnection();
+  await window.hostBridge.inputReleaseAll().catch(() => {});
+  if (metaConn) metaConn.textContent = '—';
+  setDot('warn');
+}
+
 window.hostBridge.onConfig(async (cfg) => {
   config = cfg;
   clientUrlEl.textContent = cfg.clientUrl;
   if (metaSignal) metaSignal.textContent = cfg.signalingUrl;
-  await requestNewCode();
+  const token = savedToken();
+  hostTokenInput.value = token;
+  setTokenState(Boolean(token), token ? 'token saved locally' : 'token required');
+  setMode(loadSavedMode());
+  updateRemoteExpiry();
+  if (sessionMode === 'remote' && token) await requestRemoteSession();
+  else if (sessionMode === 'legacy') await requestNewCode();
+});
+
+modeSwitch.addEventListener('click', async (event) => {
+  const button = event.target.closest('button[data-mode]');
+  if (!button) return;
+  const nextMode = button.dataset.mode;
+  if (!nextMode || nextMode === sessionMode) return;
+  await resetSessionState();
+  currentSession = null;
+  setMode(nextMode);
+  if (nextMode === 'remote') {
+    remoteIdEl.textContent = maskRemoteId('');
+    pinEl.textContent = '——————';
+    updateRemoteExpiry();
+    if (savedToken()) await requestRemoteSession();
+  } else {
+    codeEl.textContent = '——————';
+    qrImg.removeAttribute('src');
+    setQrPlaceholder('Generating QR code…');
+    await requestNewCode();
+  }
+});
+
+saveTokenBtn.addEventListener('click', async () => {
+  const token = hostTokenInput.value.trim();
+  setSavedToken(token);
+  setTokenState(Boolean(token), token ? 'token saved locally' : 'token required');
+  if (!token) {
+    await cancelRemoteSession(false);
+    setStatus('host token cleared');
+    return;
+  }
+  setStatus('host token saved');
+});
+
+generateRemoteBtn.addEventListener('click', () => requestRemoteSession());
+cancelRemoteBtn.addEventListener('click', () => cancelRemoteSession(true));
+copyRemoteIdBtn.addEventListener('click', () => copyText(currentSession?.remoteId, 'partner ID copied'));
+copyPinBtn.addEventListener('click', () => copyText(currentSession?.pin, 'one-time PIN copied'));
+
+hostTokenInput.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    saveTokenBtn.click();
+  }
 });
 
 newCodeBtn.addEventListener('click', () => requestNewCode());
@@ -109,6 +276,7 @@ qrImg.addEventListener('error', () => setQrPlaceholder('QR unavailable. Use the 
 
 async function requestNewCode() {
   if (!config) return;
+  await resetSessionState();
   setStatus('requesting pairing code…');
   qrImg.removeAttribute('src');
   setQrPlaceholder('Generating QR code…');
@@ -135,11 +303,58 @@ async function requestNewCode() {
   }
 }
 
-async function connectSignaling(sessionId) {
-  if (socket) {
-    socket.disconnect();
-    socket = null;
+async function requestRemoteSession() {
+  if (!config) return;
+  const token = hostTokenInput.value.trim() || savedToken();
+  if (!token) {
+    setTokenState(false, 'token required');
+    setStatus('paste and save a host token first');
+    hostTokenInput.focus();
+    return;
   }
+  setSavedToken(token);
+  setTokenState(true, 'requesting remote PIN…');
+  await resetSessionState();
+  remoteIdEl.textContent = maskRemoteId('');
+  pinEl.textContent = '——————';
+  updateRemoteExpiry();
+  const result = await window.hostBridge.remoteAnnounce(token);
+  if (!result?.ok) {
+    setTokenState(false, result?.error ? `token rejected: ${result.error}` : 'request failed');
+    setStatus(`remote announce failed: ${result?.error || 'unknown error'}`);
+    return;
+  }
+  currentSession = {
+    mode: 'remote',
+    remoteId: result.remoteId,
+    pin: result.pin,
+    sessionId: result.sessionId,
+    expiresAt: result.expiresAt,
+  };
+  remoteIdEl.textContent = maskRemoteId(result.remoteId);
+  pinEl.textContent = result.pin;
+  setTokenState(true, 'token saved locally');
+  updateRemoteExpiry();
+  if (expiryTimer) clearInterval(expiryTimer);
+  expiryTimer = setInterval(updateRemoteExpiry, 1000);
+  setStatus(`remote PIN ready for partner ${maskRemoteId(result.remoteId)}`);
+  await connectSignaling(result.sessionId);
+}
+
+async function cancelRemoteSession(report = true) {
+  if (expiryTimer) { clearInterval(expiryTimer); expiryTimer = null; }
+  const token = hostTokenInput.value.trim() || savedToken();
+  if (token) await window.hostBridge.remoteCancel(token).catch(() => {});
+  currentSession = null;
+  remoteIdEl.textContent = maskRemoteId('');
+  pinEl.textContent = '——————';
+  updateRemoteExpiry();
+  await resetSessionState();
+  if (report) setStatus('remote session cancelled');
+}
+
+async function connectSignaling(sessionId) {
+  disconnectSignaling();
   socket = io(config.signalingUrl, { transports: ['websocket'] });
   socket.on('connect', () => {
     setStatus(`signaling connected (id=${socket.id})`);
@@ -192,6 +407,7 @@ async function startCapture() {
 
 async function createOffer() {
   if (!localStream) await startCapture();
+  teardownPeerConnection();
   const iceServers = await fetchIceServers();
   pc = new RTCPeerConnection({ iceServers });
 

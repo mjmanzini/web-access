@@ -29,9 +29,13 @@ A postinstall script does this automatically — see `package.json`.
 
 ## How it works
 
-1. On launch the host calls `POST /pair/new` on the signaling server and shows
-   the 6-char code + a QR pointing at `CLIENT_URL/?code=XXXXXX`.
-2. It opens a Socket.IO connection and `join`s as `host`.
+1. The renderer supports two host modes:
+   - `Remote access`: the preferred production flow. Paste the host user's
+     bearer token once, then the app calls `POST /api/remote/announce` and
+     shows a Partner ID + one-time PIN.
+   - `Legacy pairing`: the older `POST /pair/new` flow with a 6-char code + QR.
+2. In either mode the host opens a Socket.IO connection and `join`s the room as
+   `host`.
 3. When a `client` peer joins, the host calls `getDisplayMedia`, builds an
    `RTCPeerConnection` with a `control` data channel, adds the video track,
    and emits an SDP offer through the signaling relay.
@@ -42,6 +46,20 @@ A postinstall script does this automatically — see `package.json`.
    isn't available).
 6. `quality` messages adjust the video sender's `maxBitrate` /
    `maxFramerate` / `scaleResolutionDownBy` via `RTCRtpSender.setParameters`.
+
+## Remote access mode
+
+1. In the browser, complete onboarding once so the host account gets a bearer
+   token from `POST /api/auth/register`.
+2. Paste that token into the Electron host's `Remote access` tab and click
+   `Save token`.
+3. Click `Generate PIN`.
+4. Share the displayed Partner ID and one-time PIN with the remote user.
+5. The browser user opens `/remote`, enters the Partner ID + PIN, and the
+   session joins the host as the same signaling room.
+
+The token is stored in `localStorage` on that host machine only. It is not read
+from `.env`, so operators can rotate it without editing deployment files.
 
 ## Env
 
