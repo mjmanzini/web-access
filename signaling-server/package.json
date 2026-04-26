@@ -1,0 +1,30 @@
+{
+  "name": "web-access-signaling-server",
+  "version": "0.1.0",
+  "description": "WebRTC signaling + pairing server for the Web-Access remote desktop tool.",
+  "main": "src/server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "start:https": "cross-env HTTPS=1 node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "dependencies": {
+    "@simplewebauthn/server": "^11.0.0",
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "mediasoup": "^3.14.8",
+    "pg": "^8.20.0",
+    "selfsigned": "^2.4.1",
+    "socket.io": "^4.7.5"
+  },
+  "devDependencies": {
+    "cross-env": "^7.0.3"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}

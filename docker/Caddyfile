@@ -1,0 +1,24 @@
+# Caddy config for Web-Access
+#
+# Two site blocks:
+#  - :8088  -> plain HTTP, used behind Cloudflare quick-tunnel (TLS terminates
+#              at Cloudflare).
+#
+# Upstreams are the host-machine processes (signaling:4000, next:3000).
+
+(routing) {
+    # Signaling / API routes go to the Node server on the host
+    @sig path /socket.io* /users* /users /pair* /ice /healthz
+    handle @sig {
+        reverse_proxy host.docker.internal:4000
+    }
+
+    # Everything else -> Next.js
+    handle {
+        reverse_proxy host.docker.internal:3000
+    }
+}
+
+:8088 {
+    import routing
+}

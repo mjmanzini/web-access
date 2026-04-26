@@ -1,0 +1,23 @@
+[
+  {
+    "id": "cf7ab6cb0360",
+    "username": "alice",
+    "displayName": "Alice",
+    "token": "PU4RMzqiEqB0vOQWDWJWkYvhXtq1srAAiOf57MooKyk",
+    "createdAt": 1776804967056
+  },
+  {
+    "id": "471d98eaa9d2",
+    "username": "jastice",
+    "displayName": "Jastice",
+    "token": "7h0gK-p6808wlHm6MuUL5pWK6ZwyFH47afGUeIDEQIA",
+    "createdAt": 1776805260321
+  },
+  {
+    "id": "ac31538871cc",
+    "username": "john",
+    "displayName": "John",
+    "token": "_Wn2ucgAbQaJwUs2qMYy0vKSol7f3NPFs8F3rw5xiZM",
+    "createdAt": 1776805378879
+  }
+]

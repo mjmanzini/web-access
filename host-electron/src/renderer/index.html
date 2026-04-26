@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Web-Access Host</title>
+    <meta http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src *; media-src blob:;" />
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b0d12;
+        --surface: #161a22;
+        --surface-2: #1c212b;
+        --border: #262c38;
+        --text: #e8ecf3;
+        --muted: #96a0b3;
+        --muted-2: #6b7489;
+        --primary: #2f80ff;
+        --primary-hi: #4a92ff;
+        --success: #23c879;
+        --danger: #ef4f6c;
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0; padding: 0;
+        background:
+          radial-gradient(800px 460px at 100% -10%, rgba(47, 128, 255, 0.12), transparent 60%),
+          radial-gradient(700px 420px at -10% 110%, rgba(120, 80, 220, 0.10), transparent 60%),
+          var(--bg);
+        color: var(--text);
+        font-family: -apple-system, "Segoe UI", Roboto, Inter, system-ui, sans-serif;
+        height: 100%;
+        -webkit-font-smoothing: antialiased;
+      }
+      .app {
+        height: 100%;
+        display: grid;
+        grid-template-rows: auto 1fr;
+        padding: 20px 24px 24px;
+        gap: 20px;
+      }
+      .topbar {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .brand-mark {
+        width: 32px; height: 32px; border-radius: 9px;
+        background: linear-gradient(135deg, var(--primary), #7a4dff);
+        display: grid; place-items: center;
+        color: #fff; font-weight: 700; font-size: 14px;
+        box-shadow: 0 6px 18px -6px rgba(47, 128, 255, 0.7);
+      }
+      .brand-text { font-size: 14px; font-weight: 600; }
+      .brand-text .dim { color: var(--muted); font-weight: 500; }
+
+      .status {
+        margin-left: auto;
+        display: inline-flex; align-items: center; gap: 8px;
+        font-size: 12px; color: var(--muted);
+        background: var(--surface);
+        border: 1px solid var(--border);
+        padding: 6px 10px; border-radius: 999px;
+      }
+      .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted-2); }
+      .dot.ok { background: var(--success); box-shadow: 0 0 0 3px rgba(35, 200, 121, 0.15); }
+      .dot.warn { background: #f5a623; box-shadow: 0 0 0 3px rgba(245, 166, 35, 0.15); animation: pulse 1.4s ease-in-out infinite; }
+      .dot.err { background: var(--danger); box-shadow: 0 0 0 3px rgba(239, 79, 108, 0.15); }
+      @keyframes pulse { 50% { opacity: 0.5; } }
+
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr 1.2fr;
+        gap: 18px;
+        align-items: start;
+      }
+      @media (max-width: 720px) {
+        .grid { grid-template-columns: 1fr; }
+      }
+
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 18px;
+        box-shadow: 0 20px 60px -30px rgba(0, 0, 0, 0.8);
+      }
+      .card h2 {
+        margin: 0 0 6px;
+        font-size: 15px;
+        font-weight: 600;
+      }
+      .card .hint { color: var(--muted); font-size: 12.5px; margin-bottom: 14px; }
+
+      .pair-big {
+        font-family: ui-monospace, Menlo, monospace;
+        font-size: 36px;
+        letter-spacing: 10px;
+        text-align: center;
+        padding: 18px 10px;
+        background: #10131a;
+        border: 1px dashed var(--border);
+        border-radius: 12px;
+        color: var(--text);
+        font-weight: 700;
+      }
+      .qr-wrap {
+        position: relative;
+        display: grid;
+        place-items: center;
+        padding: 14px;
+        background: #fff;
+        border-radius: 12px;
+        margin: 14px auto 0;
+        width: 208px;
+        min-height: 208px;
+      }
+      .qr-wrap img { display: block; width: 180px; height: 180px; }
+      .qr-empty {
+        position: absolute;
+        inset: 14px;
+        display: grid;
+        place-items: center;
+        text-align: center;
+        color: #4b5565;
+        font-size: 12px;
+        line-height: 1.4;
+        padding: 12px;
+        border: 1px dashed #c9d2de;
+        border-radius: 10px;
+        background: #f7f9fc;
+      }
+      .qr-empty.hidden { display: none; }
+
+      .url-row {
+        display: flex; align-items: center; gap: 8px;
+        margin-top: 12px;
+        background: #10131a;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 8px 10px;
+        font-family: ui-monospace, monospace;
+        font-size: 12.5px;
+        color: var(--muted);
+        word-break: break-all;
+      }
+      .url-row strong { color: var(--text); }
+
+      .btn-row {
+        display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap;
+      }
+      button.btn {
+        display: inline-flex; align-items: center; justify-content: center;
+        gap: 8px;
+        border: 0; cursor: pointer;
+        height: 40px; padding: 0 14px;
+        border-radius: 10px;
+        font-size: 14px; font-weight: 600;
+        font-family: inherit; color: inherit;
+        transition: background 120ms ease, transform 120ms ease;
+      }
+      button.btn.primary { background: var(--primary); color: #fff; }
+      button.btn.primary:hover { background: var(--primary-hi); }
+      button.btn.primary:active { transform: translateY(1px); }
+      button.btn.secondary { background: var(--surface-2); border: 1px solid var(--border); color: var(--text); }
+      button.btn.secondary:hover { background: #222836; }
+
+      .preview-card {
+        padding: 14px;
+      }
+      .preview-wrap {
+        position: relative;
+        border-radius: 10px;
+        overflow: hidden;
+        background: #000;
+        aspect-ratio: 16 / 9;
+      }
+      .preview-wrap video {
+        width: 100%; height: 100%;
+        object-fit: contain;
+        display: block;
+      }
+      .preview-placeholder {
+        position: absolute; inset: 0;
+        display: grid; place-items: center;
+        color: var(--muted);
+        font-size: 13px;
+        text-align: center;
+        padding: 16px;
+      }
+
+      .meta {
+        margin-top: 10px;
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 4px 10px;
+        font-size: 12.5px;
+      }
+      .meta dt { color: var(--muted); }
+      .meta dd { margin: 0; color: var(--text); font-family: ui-monospace, monospace; }
+
+      .status-log {
+        margin-top: 10px;
+        padding: 8px 10px;
+        background: #10131a;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        color: var(--muted);
+        font-size: 12px;
+        font-family: ui-monospace, monospace;
+        min-height: 42px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div class="brand-mark">W</div>
+        <div class="brand-text">Web-Access <span class="dim">· Host</span></div>
+        <div class="status" id="statusBox"><span class="dot warn" id="statusDot"></span><span id="status">starting…</span></div>
+      </header>
+
+      <section class="grid">
+        <div class="card">
+          <h2>Pairing code</h2>
+          <div class="hint">Share this code with the phone, or scan the QR.</div>
+          <div class="pair-big" id="code">——————</div>
+          <div class="qr-wrap">
+            <img id="qr" alt="Pairing QR" />
+            <div class="qr-empty" id="qrEmpty">Generating QR code…</div>
+          </div>
+          <div class="url-row">Open on phone: <strong id="clientUrl">…</strong></div>
+          <div class="btn-row">
+            <button class="btn secondary" id="newCode">New code</button>
+            <button class="btn secondary" id="copyLink">Copy phone link</button>
+            <button class="btn secondary" id="startCall">Start call</button>
+            <button class="btn primary" id="start">Share screen now</button>
+          </div>
+        </div>
+
+        <div class="card preview-card">
+          <h2>Your screen</h2>
+          <div class="hint">Preview of what the remote viewer sees.</div>
+          <div class="preview-wrap">
+            <video id="preview" autoplay muted playsinline></video>
+            <div class="preview-placeholder" id="previewPlaceholder">Waiting for a client to join…</div>
+          </div>
+          <dl class="meta">
+            <dt>Signaling</dt><dd id="metaSignal">—</dd>
+            <dt>Connection</dt><dd id="metaConn">—</dd>
+          </dl>
+          <div class="status-log" id="log">Ready.</div>
+        </div>
+      </section>
+    </div>
+    <script src="./vendor/socket.io.min.js"></script>
+    <script src="./renderer.js"></script>
+  </body>
+</html>

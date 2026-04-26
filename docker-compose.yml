@@ -1,0 +1,66 @@
+version: '3.9'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: web-access-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-webaccess}
+      POSTGRES_USER: ${POSTGRES_USER:-webaccess}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-webaccess}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-webaccess} -d ${POSTGRES_DB:-webaccess}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  adminer:
+    image: adminer:4
+    container_name: web-access-adminer
+    restart: unless-stopped
+    depends_on: [postgres]
+    ports:
+      - "8080:8080"
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+
+  # Unified HTTPS reverse proxy. Routes:
+  #   /socket.io, /users*, /ice, /pair*, /healthz  -> signaling (host:4000)
+  #   everything else                               -> web-client (host:3000)
+  # This way the phone (and Cloudflare quick-tunnel) only needs ONE URL
+  # and the browser treats signaling as "same origin" — no CORS, no mixed
+  # content, and the client can use relative URLs.
+  caddy:
+    image: caddy:2-alpine
+    container_name: web-access-caddy
+    restart: unless-stopped
+    ports:
+      - "8443:8443"    # HTTPS
+      - "8088:8088"    # HTTP (used by cloudflared quick-tunnel)
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    extra_hosts:
+      # Let the container reach services on the Windows host.
+      - "host.docker.internal:host-gateway"
+
+  # Optional: cloudflared quick-tunnel for public HTTPS URL over LTE.
+  # Start it manually with:  docker compose --profile tunnel up cloudflared
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: web-access-cloudflared
+    restart: unless-stopped
+    profiles: ["tunnel"]
+    command: tunnel --no-autoupdate --url http://caddy:8088
+    depends_on: [caddy]
+
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:

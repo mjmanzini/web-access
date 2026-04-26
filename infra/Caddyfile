@@ -1,0 +1,7 @@
+{$WEB_HOSTNAME} {
+    reverse_proxy web-client:3000
+}
+
+{$SIGNALING_HOSTNAME} {
+    reverse_proxy signaling:4000
+}

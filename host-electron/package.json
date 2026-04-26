@@ -1,0 +1,31 @@
+{
+  "name": "web-access-host",
+  "version": "0.1.0",
+  "description": "Electron host for Web-Access remote desktop. Captures the screen and streams it over WebRTC.",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "postinstall": "node scripts/copy-vendor.js",
+    "vendor": "node scripts/copy-vendor.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.6.1",
+    "qrcode": "^1.5.3",
+    "socket.io-client": "^4.7.5"
+  },
+  "optionalDependencies": {
+    "@nut-tree-fork/nut-js": "^4.2.0"
+  },
+  "devDependencies": {
+    "electron": "^41.2.2"
+  },
+  "overrides": {
+    "jimp": "^1.6.1",
+    "@jimp/core": "^1.6.1",
+    "@jimp/custom": "^1.6.1",
+    "file-type": "^21.3.1"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

@@ -1,0 +1,92 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: "${POSTGRES_DB:-webaccess}"
+      POSTGRES_USER: "${POSTGRES_USER:-webaccess}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-webaccess} -d ${POSTGRES_DB:-webaccess}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  web-client:
+    build:
+      context: ../web-client
+      dockerfile: ../infra/web-client.Dockerfile
+      args:
+        NEXT_PUBLIC_SIGNALING_URL: "${SIGNALING_PUBLIC_URL}"
+    restart: unless-stopped
+    expose:
+      - "3000"
+
+  signaling:
+    build:
+      context: ../signaling-server
+      dockerfile: ../infra/signaling.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PORT: 4000
+      CORS_ORIGIN: "*"
+      DATABASE_URL: "postgres://${POSTGRES_USER:-webaccess}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-webaccess}"
+      MEDIASOUP_ANNOUNCED_IP: "${MEDIASOUP_ANNOUNCED_IP:-${PUBLIC_IP}}"
+      MEDIASOUP_MIN_PORT: "${MEDIASOUP_MIN_PORT:-40000}"
+      MEDIASOUP_MAX_PORT: "${MEDIASOUP_MAX_PORT:-40200}"
+      STUN_URLS: "stun:${TURN_REALM}:3478"
+      TURN_URL: "turn:${TURN_REALM}:3478"
+      TURN_SHARED_SECRET: "${TURN_SHARED_SECRET}"
+      TURN_TTL_SECONDS: "86400"
+    expose:
+      - "4000"
+    ports:
+      - "${MEDIASOUP_MIN_PORT:-40000}-${MEDIASOUP_MAX_PORT:-40200}:${MEDIASOUP_MIN_PORT:-40000}-${MEDIASOUP_MAX_PORT:-40200}/udp"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - web-client
+      - signaling
+    environment:
+      WEB_HOSTNAME: "${WEB_HOSTNAME}"
+      SIGNALING_HOSTNAME: "${SIGNALING_HOSTNAME}"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+  coturn:
+    image: coturn/coturn:4.6
+    restart: unless-stopped
+    network_mode: host     # required so min-port/max-port UDP range works
+    environment:
+      PUBLIC_IP: "${PUBLIC_IP}"
+      TURN_REALM: "${TURN_REALM}"
+      TURN_SHARED_SECRET: "${TURN_SHARED_SECRET}"
+      TURN_MIN_PORT: "${TURN_MIN_PORT:-49160}"
+      TURN_MAX_PORT: "${TURN_MAX_PORT:-49200}"
+    volumes:
+      - ./coturn/turnserver.conf:/etc/coturn/turnserver.conf.tmpl:ro
+    # Render the template with envsubst at start, then run coturn.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        apk add --no-cache gettext >/dev/null 2>&1 || true
+        envsubst < /etc/coturn/turnserver.conf.tmpl > /tmp/turnserver.conf
+        exec turnserver -c /tmp/turnserver.conf
+
+volumes:
+  caddy_data:
+  caddy_config:
+  pg_data:

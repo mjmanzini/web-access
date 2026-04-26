@@ -1,0 +1,77 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  signaling:
+    name: signaling-server
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: signaling-server/package-lock.json
+      - run: npm ci
+        working-directory: signaling-server
+      - name: Syntax check all JS modules
+        working-directory: signaling-server
+        run: |
+          for f in $(find src -name '*.js'); do node --check "$f" || exit 1; done
+      - name: Verify ES modules import
+        working-directory: signaling-server
+        env:
+          DATABASE_URL: postgres://x:x@127.0.0.1:1/x
+        run: |
+          node -e "Promise.all([
+            import('./src/auth/sessions.js'),
+            import('./src/auth/register.js'),
+            import('./src/chat/messages.js'),
+            import('./src/chat/presence.js'),
+            import('./src/remote/sessions.js')
+          ]).then(()=>console.log('OK'))"
+
+  web-client:
+    name: web-client
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web-client/package-lock.json
+      - run: npm ci
+        working-directory: web-client
+      - name: Build (production)
+        working-directory: web-client
+        env:
+          NEXT_PUBLIC_SIGNALING_URL: https://signal.example.com
+        run: npm run build
+
+  docker-build:
+    name: docker-build
+    runs-on: ubuntu-latest
+    needs: [signaling, web-client]
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build signaling image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./signaling-server
+          file: ./infra/signaling.Dockerfile
+          push: false
+      - name: Build web-client image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./web-client
+          file: ./infra/web-client.Dockerfile
+          push: false
+          build-args: |
+            NEXT_PUBLIC_SIGNALING_URL=https://signal.example.com
