@@ -14,7 +14,8 @@
  * No external OAuth dependency — uses Node 18+ fetch + crypto only.
  */
 import crypto from 'node:crypto';
-import { pool, logEvent } from '../db.js';
+import { logEvent } from '../db.js';
+import { createStorage } from '../storage/index.js';
 
 export const OAUTH_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS oauth_identities (
@@ -139,14 +140,10 @@ function verifyState(state) {
 function sha256(buf) { return crypto.createHash('sha256').update(buf).digest(); }
 function toB64u(value) { return Buffer.from(value).toString('base64url'); }
 
-async function issueSessionToken(userId, ttlSeconds = 60 * 60 * 24 * 30) {
+async function issueSessionToken(storage, userId, ttlSeconds = 60 * 60 * 24 * 30) {
   const raw = crypto.randomBytes(32);
   const token = toB64u(raw);
-  await pool.query(
-    `INSERT INTO auth_credentials (user_id, credential_type, token_hash, expires_at)
-     VALUES ($1, 'session', $2, now() + make_interval(secs => $3))`,
-    [userId, sha256(raw), ttlSeconds],
-  );
+  await storage.auth.issueSessionToken({ userId, tokenHash: sha256(raw), ttlSeconds });
   return token;
 }
 
@@ -164,38 +161,31 @@ function deriveUsername(profile) {
   return base.toLowerCase().replace(/[^a-z0-9_.-]/g, '').slice(0, 24) || 'user';
 }
 
-async function findOrCreateUser(provider, profile) {
+async function findOrCreateUser(storage, provider, profile) {
   // 1. Existing oauth identity?
-  const existing = await pool.query(
-    `SELECT u.id, u.username, u.display_name AS "displayName"
-       FROM oauth_identities oi
-       JOIN users u ON u.id = oi.user_id
-      WHERE oi.provider = $1 AND oi.provider_user_id = $2`,
-    [provider, profile.providerUserId],
-  );
-  if (existing.rows[0]) {
-    await pool.query(
-      `UPDATE oauth_identities SET last_login_at = now()
-        WHERE provider = $1 AND provider_user_id = $2`,
-      [provider, profile.providerUserId],
-    ).catch(() => {});
-    return { user: existing.rows[0], created: false };
+  const existing = await storage.auth.findOAuthIdentityUser({
+    provider,
+    providerUserId: profile.providerUserId,
+  });
+  if (existing) {
+    await storage.auth.touchOAuthIdentityLogin({
+      provider,
+      providerUserId: profile.providerUserId,
+    }).catch(() => {});
+    return { user: existing, created: false };
   }
 
   // 2. Same email as a local user? Link.
   if (profile.email) {
-    const byEmail = await pool.query(
-      `SELECT id, username, display_name AS "displayName" FROM users WHERE lower(email) = lower($1) LIMIT 1`,
-      [profile.email],
-    ).catch(() => ({ rows: [] }));
-    if (byEmail.rows[0]) {
-      await pool.query(
-        `INSERT INTO oauth_identities (provider, provider_user_id, user_id, email, last_login_at)
-         VALUES ($1, $2, $3, $4, now())
-         ON CONFLICT (provider, provider_user_id) DO UPDATE SET last_login_at = now()`,
-        [provider, profile.providerUserId, byEmail.rows[0].id, profile.email],
-      );
-      return { user: byEmail.rows[0], created: false };
+    const byEmail = await storage.auth.findUserByEmail(profile.email).catch(() => null);
+    if (byEmail) {
+      await storage.auth.upsertOAuthIdentity({
+        provider,
+        providerUserId: profile.providerUserId,
+        userId: byEmail.id,
+        email: profile.email,
+      });
+      return { user: byEmail, created: false };
     }
   }
 
@@ -208,10 +198,12 @@ async function findOrCreateUser(provider, profile) {
     id = randomId();
     const candidate = attempt === 0 ? base : `${base}.${crypto.randomBytes(2).toString('hex')}`;
     try {
-      await pool.query(
-        `INSERT INTO users (id, username, display_name, token) VALUES ($1, $2, $3, $4)`,
-        [id, candidate, display, randomToken()],
-      );
+      await storage.users.createUser({
+        id,
+        username: candidate,
+        displayName: display,
+        token: randomToken(),
+      });
       username = candidate;
       break;
     } catch (e) {
@@ -222,15 +214,16 @@ async function findOrCreateUser(provider, profile) {
 
   // Best-effort: stash email if column exists.
   if (profile.email) {
-    await pool.query(`UPDATE users SET email = $2 WHERE id = $1`, [id, profile.email])
+    await storage.auth.updateUserEmail({ userId: id, email: profile.email })
       .catch(() => {});
   }
 
-  await pool.query(
-    `INSERT INTO oauth_identities (provider, provider_user_id, user_id, email, last_login_at)
-     VALUES ($1, $2, $3, $4, now())`,
-    [provider, profile.providerUserId, id, profile.email || null],
-  );
+  await storage.auth.createOAuthIdentity({
+    provider,
+    providerUserId: profile.providerUserId,
+    userId: id,
+    email: profile.email || null,
+  });
 
   logEvent('oauth_user_created', { userId: id, payload: { provider, email: profile.email } });
   return { user: { id, username, displayName: display }, created: true };
@@ -246,7 +239,7 @@ async function findOrCreateUser(provider, profile) {
  *   clientUrl    - origin of the web client (where users are sent after login)
  *   callbackBase - public origin of THIS server (used to build redirect_uri)
  */
-export function mountOAuth(app, { clientUrl, callbackBase }) {
+export function mountOAuth(app, { clientUrl, callbackBase }, storage = createStorage()) {
   const providers = buildProviders();
   const isEnabled = (p) => Boolean(p.clientId && p.clientSecret);
   const enabledIds = Object.values(providers).filter(isEnabled).map((p) => p.id);
@@ -358,8 +351,8 @@ export function mountOAuth(app, { clientUrl, callbackBase }) {
       }
 
       // 3) Find-or-create local user, issue session token.
-      const { user, created } = await findOrCreateUser(provider.id, profile);
-      const token = await issueSessionToken(user.id);
+      const { user, created } = await findOrCreateUser(storage, provider.id, profile);
+      const token = await issueSessionToken(storage, user.id);
 
       logEvent('oauth_login', { userId: user.id, payload: { provider: provider.id, created } });
 

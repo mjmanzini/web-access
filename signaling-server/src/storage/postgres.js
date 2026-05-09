@@ -179,6 +179,54 @@ export function createPostgresStorage() {
         );
         return rows[0] || null;
       },
+
+      async findOAuthIdentityUser({ provider, providerUserId }) {
+        const { rows } = await pool.query(
+          `SELECT u.id, u.username, u.display_name AS "displayName"
+             FROM oauth_identities oi
+             JOIN users u ON u.id = oi.user_id
+            WHERE oi.provider = $1 AND oi.provider_user_id = $2`,
+          [provider, providerUserId],
+        );
+        return rows[0] || null;
+      },
+
+      async touchOAuthIdentityLogin({ provider, providerUserId }) {
+        await pool.query(
+          `UPDATE oauth_identities SET last_login_at = now()
+            WHERE provider = $1 AND provider_user_id = $2`,
+          [provider, providerUserId],
+        );
+      },
+
+      async findUserByEmail(email) {
+        const { rows } = await pool.query(
+          `SELECT id, username, display_name AS "displayName" FROM users WHERE lower(email) = lower($1) LIMIT 1`,
+          [email],
+        );
+        return rows[0] || null;
+      },
+
+      async upsertOAuthIdentity({ provider, providerUserId, userId, email }) {
+        await pool.query(
+          `INSERT INTO oauth_identities (provider, provider_user_id, user_id, email, last_login_at)
+           VALUES ($1, $2, $3, $4, now())
+           ON CONFLICT (provider, provider_user_id) DO UPDATE SET last_login_at = now()`,
+          [provider, providerUserId, userId, email],
+        );
+      },
+
+      async createOAuthIdentity({ provider, providerUserId, userId, email }) {
+        await pool.query(
+          `INSERT INTO oauth_identities (provider, provider_user_id, user_id, email, last_login_at)
+           VALUES ($1, $2, $3, $4, now())`,
+          [provider, providerUserId, userId, email],
+        );
+      },
+
+      async updateUserEmail({ userId, email }) {
+        await pool.query(`UPDATE users SET email = $2 WHERE id = $1`, [userId, email]);
+      },
     },
 
     remote: {
