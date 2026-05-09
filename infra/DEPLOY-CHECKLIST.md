@@ -136,19 +136,16 @@ The repo ships with two workflows under `.github/workflows/`:
 
 - `ci.yml` — runs on every PR and push: syntax-checks the signaling
   server, builds the Next.js client, and verifies both Docker images build.
-- `deploy.yml` — runs on push to `main`: SSHes to the VPS, `git pull`s,
-  rebuilds `signaling` + `web-client` only (postgres / caddy / coturn keep
-  running), then smoke-tests the public endpoints.
+- `deploy.yml` — runs on push to `main` on a self-hosted runner installed on
+  the VPS, `git fetch`es the checked-out repo, rebuilds `signaling` +
+  `web-client` only (postgres / caddy / coturn keep running), then smoke-tests
+  the public endpoints.
 
-Required repository secrets (Settings → Secrets and variables → Actions):
+Required GitHub environment secret (Settings → Secrets and variables → Actions → Environments → `production`):
 
 | Secret | Example |
 |---|---|
-| `DEPLOY_HOST` | `154.115.158.177` |
-| `DEPLOY_USER` | `ubuntu` |
-| `DEPLOY_SSH_KEY` | contents of a private key authorized in `~/.ssh/authorized_keys` |
 | `DEPLOY_PATH` | `/home/ubuntu/web-access` |
-| `DEPLOY_KNOWN_HOSTS` *(optional)* | output of `ssh-keyscan <host>` |
 
 Optional repository variables (used by the smoke test):
 
@@ -156,6 +153,23 @@ Optional repository variables (used by the smoke test):
 |---|---|
 | `WEB_URL` | `https://mjjsmanzini.com` |
 | `SIGNAL_URL` | `https://signal.mjjsmanzini.com` |
+
+Required self-hosted runner setup on the VPS:
+
+```bash
+mkdir -p ~/actions-runner && cd ~/actions-runner
+curl -o actions-runner-linux-x64.tar.gz -L https://github.com/actions/runner/releases/latest/download/actions-runner-linux-x64.tar.gz
+tar xzf ./actions-runner-linux-x64.tar.gz
+./config.sh --url https://github.com/mjmanzini/web-access --labels web-access-vps --unattended
+sudo ./svc.sh install ubuntu
+sudo ./svc.sh start
+```
+
+The workflow expects the runner to advertise the labels `self-hosted`,
+`linux`, `x64`, and `web-access-vps`.
+
+The repository must already be checked out on the VPS at `DEPLOY_PATH`, and
+that checkout must contain `infra/.env`.
 
 Manual redeploy from a workstation:
 

@@ -66,8 +66,8 @@ chmod +x deploy-ubuntu.sh verify-vps.sh
 
 ## GitHub Actions setup
 
-To provision the `production` GitHub environment and the deploy secrets/vars
-used by [.github/workflows/deploy.yml](../.github/workflows/deploy.yml), run:
+To provision the `production` GitHub environment values used by
+[.github/workflows/deploy.yml](../.github/workflows/deploy.yml), run:
 
 ```powershell
 pwsh ./scripts/setup-github-deploy.ps1 \
@@ -82,10 +82,14 @@ pwsh ./scripts/setup-github-deploy.ps1 \
 Prerequisites:
 - GitHub CLI (`gh`) installed and authenticated with access to the repo
 - PowerShell 7+ (`pwsh`)
-- Optional: `ssh-keyscan` available to pre-populate `DEPLOY_KNOWN_HOSTS`
+- A self-hosted GitHub Actions runner installed on the VPS with label `web-access-vps`
 
 If you omit optional values, the script prompts for what it needs and leaves the
 smoke-test variables unset.
+
+The deploy workflow no longer SSHes into the server. It runs directly on the
+VPS through the self-hosted runner, which makes it compatible with Cloudflare
+Tunnel setups where port 22 is not exposed publicly.
 
 ## Cloudflare DNS
 

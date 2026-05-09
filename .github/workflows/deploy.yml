@@ -1,14 +1,12 @@
 name: deploy
 
-# Deploys the latest commit on `main` to the VPS over SSH.
+# Deploys the latest commit on `main` using a self-hosted runner on the VPS.
 #
-# Required repository secrets:
-#   DEPLOY_HOST       — IP or DNS name of the VPS (e.g. 154.115.158.177)
-#   DEPLOY_USER       — non-root user with docker group membership (e.g. ubuntu)
-#   DEPLOY_SSH_KEY    — private OpenSSH key authorized on the VPS
+# Required environment secret:
 #   DEPLOY_PATH       — absolute path to the repo on the VPS (e.g. /home/ubuntu/web-access)
-# Optional:
-#   DEPLOY_KNOWN_HOSTS — output of `ssh-keyscan <host>` to pin the host key
+#
+# Required self-hosted runner labels on the VPS:
+#   self-hosted, linux, x64, web-access-vps
 
 on:
   push:
@@ -22,65 +20,37 @@ concurrency:
 jobs:
   deploy:
     name: deploy-to-vps
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, web-access-vps]
     environment: production
     steps:
       - name: Validate deploy configuration
         env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
         run: |
           set -euo pipefail
-          missing=0
-          for name in DEPLOY_HOST DEPLOY_USER DEPLOY_SSH_KEY DEPLOY_PATH; do
-            if [ -z "${!name:-}" ]; then
-              echo "::error title=Missing deploy secret::${name} is not configured for the production environment."
-              missing=1
-            fi
-          done
-          if [ "$missing" -ne 0 ]; then
+          if [ -z "${DEPLOY_PATH:-}" ]; then
+            echo "::error title=Missing deploy secret::DEPLOY_PATH is not configured for the production environment."
+            exit 1
+          fi
+          if [ ! -d "$DEPLOY_PATH/.git" ]; then
+            echo "::error title=Missing deploy checkout::$DEPLOY_PATH does not contain a git checkout on the VPS runner."
             exit 1
           fi
 
-      - name: Configure SSH
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
-        run: |
-          set -euo pipefail
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_deploy
-          chmod 600 ~/.ssh/id_deploy
-          if [ -n "${DEPLOY_KNOWN_HOSTS:-}" ]; then
-            printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          else
-            ssh-keyscan -H "$DEPLOY_HOST" > ~/.ssh/known_hosts 2>/dev/null
-          fi
-          chmod 600 ~/.ssh/known_hosts
-
       - name: Pull & redeploy
         env:
-          HOST: ${{ secrets.DEPLOY_HOST }}
-          USER: ${{ secrets.DEPLOY_USER }}
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
         run: |
-          ssh -i ~/.ssh/id_deploy "$USER@$HOST" "bash -se -- '$DEPLOY_PATH'" <<'EOF'
-            set -euo pipefail
-            DEPLOY_PATH="$1"
-            cd "$DEPLOY_PATH"
-            echo "[deploy] git pull"
-            git fetch --all --prune
-            git reset --hard origin/main
-            echo "[deploy] rebuilding signaling + web-client"
-            docker compose --env-file infra/.env -f infra/docker-compose.yml \
-              up -d --build --no-deps signaling web-client
-            echo "[deploy] running services"
-            docker compose --env-file infra/.env -f infra/docker-compose.yml ps
-          EOF
+          set -euo pipefail
+          cd "$DEPLOY_PATH"
+          echo "[deploy] git fetch"
+          git fetch --all --prune
+          git reset --hard "$GITHUB_SHA"
+          echo "[deploy] rebuilding signaling + web-client"
+          docker compose --env-file infra/.env -f infra/docker-compose.yml \
+            up -d --build --no-deps signaling web-client
+          echo "[deploy] running services"
+          docker compose --env-file infra/.env -f infra/docker-compose.yml ps
 
       - name: Smoke test public endpoints
         env:
