@@ -91,6 +91,18 @@ The deploy workflow no longer SSHes into the server. It runs directly on the
 VPS through the self-hosted runner, which makes it compatible with Cloudflare
 Tunnel setups where port 22 is not exposed publicly.
 
+To install that runner on the VPS, generate a short-lived registration token:
+
+```powershell
+& 'C:\Program Files\GitHub CLI\gh.exe' api -X POST repos/mjmanzini/web-access/actions/runners/registration-token --jq .token
+```
+
+Then run on the VPS:
+
+```bash
+sudo GITHUB_RUNNER_TOKEN=<token> bash infra/install-gh-runner.sh --runner-user ubuntu
+```
+
 ## Cloudflare DNS
 
 Use these DNS records for the VPS deployment:

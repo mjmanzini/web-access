@@ -157,12 +157,9 @@ Optional repository variables (used by the smoke test):
 Required self-hosted runner setup on the VPS:
 
 ```bash
-mkdir -p ~/actions-runner && cd ~/actions-runner
-curl -o actions-runner-linux-x64.tar.gz -L https://github.com/actions/runner/releases/latest/download/actions-runner-linux-x64.tar.gz
-tar xzf ./actions-runner-linux-x64.tar.gz
-./config.sh --url https://github.com/mjmanzini/web-access --labels web-access-vps --unattended
-sudo ./svc.sh install ubuntu
-sudo ./svc.sh start
+gh api -X POST repos/mjmanzini/web-access/actions/runners/registration-token --jq .token
+# copy the token output, then run on the VPS:
+sudo GITHUB_RUNNER_TOKEN=<token> bash infra/install-gh-runner.sh --runner-user ubuntu
 ```
 
 The workflow expects the runner to advertise the labels `self-hosted`,
