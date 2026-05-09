@@ -229,6 +229,176 @@ export function createPostgresStorage() {
       },
     },
 
+    chat: {
+      async findOrCreateOneToOneConversation({ conversationId, meId, peerId }) {
+        const { rows } = await pool.query(
+          `SELECT c.id FROM conversations c
+             JOIN conversation_members m1 ON m1.conversation_id=c.id AND m1.user_id=$1
+             JOIN conversation_members m2 ON m2.conversation_id=c.id AND m2.user_id=$2
+            WHERE c.is_group = false
+            LIMIT 1`,
+          [meId, peerId],
+        );
+        if (rows[0]) return rows[0].id;
+
+        const client = await pool.connect();
+        try {
+          await client.query('BEGIN');
+          await client.query(
+            `INSERT INTO conversations (id, is_group, created_by) VALUES ($1, false, $2)`,
+            [conversationId, meId],
+          );
+          await client.query(
+            `INSERT INTO conversation_members (conversation_id, user_id) VALUES ($1,$2),($1,$3)`,
+            [conversationId, meId, peerId],
+          );
+          await client.query('COMMIT');
+          return conversationId;
+        } catch (error) {
+          await client.query('ROLLBACK').catch(() => {});
+          throw error;
+        } finally {
+          client.release();
+        }
+      },
+
+      async listConversations(userId) {
+        const { rows } = await pool.query(
+          `SELECT c.id, c.is_group, c.title, c.last_msg_at,
+                  (SELECT body  FROM chat_messages_v2 m
+                    WHERE m.conversation_id=c.id ORDER BY created_at DESC LIMIT 1) AS last_body,
+                  (SELECT json_agg(json_build_object('id', u.id, 'displayName', u.display_name))
+                     FROM conversation_members cm JOIN users u ON u.id=cm.user_id
+                    WHERE cm.conversation_id=c.id AND cm.user_id <> $1) AS members,
+                  COALESCE((SELECT COUNT(*) FROM chat_messages_v2 m
+                             LEFT JOIN message_receipts r ON r.message_id=m.id AND r.user_id=$1
+                            WHERE m.conversation_id=c.id AND m.sender_id <> $1
+                              AND r.read_at IS NULL), 0) AS unread
+             FROM conversations c
+             JOIN conversation_members cm ON cm.conversation_id=c.id
+            WHERE cm.user_id = $1
+            ORDER BY c.last_msg_at DESC NULLS LAST, c.created_at DESC`,
+          [userId],
+        );
+        return rows;
+      },
+
+      async listMessages({ conversationId, userId, before, limit }) {
+        const { rows: membershipRows } = await pool.query(
+          `SELECT 1 FROM conversation_members WHERE conversation_id=$1 AND user_id=$2`,
+          [conversationId, userId],
+        );
+        if (!membershipRows[0]) throw new Error('forbidden');
+
+        const params = [conversationId];
+        let where = `conversation_id = $1 AND deleted_at IS NULL`;
+        if (before) {
+          params.push(before);
+          where += ` AND created_at < $${params.length}`;
+        }
+        params.push(Math.min(Number(limit) || 50, 200));
+        const { rows } = await pool.query(
+          `SELECT id, conversation_id AS "conversationId", sender_id AS "senderId",
+                  body, client_id AS "clientId", created_at AS "createdAt"
+             FROM chat_messages_v2
+            WHERE ${where}
+            ORDER BY created_at DESC
+            LIMIT $${params.length}`,
+          params,
+        );
+        return rows.reverse();
+      },
+
+      async persistMessage({ messageId, conversationId, senderId, body, clientId }) {
+        const client = await pool.connect();
+        try {
+          await client.query('BEGIN');
+
+          const { rows: membershipRows } = await client.query(
+            `SELECT 1 FROM conversation_members WHERE conversation_id=$1 AND user_id=$2`,
+            [conversationId, senderId],
+          );
+          if (!membershipRows[0]) throw new Error('forbidden');
+
+          const { rows } = await client.query(
+            `INSERT INTO chat_messages_v2 (id, conversation_id, sender_id, body, client_id)
+             VALUES ($1,$2,$3,$4,$5)
+             RETURNING id, conversation_id AS "conversationId", sender_id AS "senderId",
+                       body, client_id AS "clientId", created_at AS "createdAt"`,
+            [messageId, conversationId, senderId, body, clientId || null],
+          );
+          await client.query(
+            `UPDATE conversations SET last_msg_at = now() WHERE id = $1`,
+            [conversationId],
+          );
+          await client.query('COMMIT');
+          return rows[0];
+        } catch (error) {
+          await client.query('ROLLBACK').catch(() => {});
+          throw error;
+        } finally {
+          client.release();
+        }
+      },
+
+      async listConversationMemberIds(conversationId) {
+        const { rows } = await pool.query(
+          `SELECT user_id AS "userId" FROM conversation_members WHERE conversation_id=$1`,
+          [conversationId],
+        );
+        return rows.map((row) => row.userId);
+      },
+
+      async markDelivered({ messageId, userId }) {
+        await pool.query(
+          `INSERT INTO message_receipts (message_id, user_id, delivered_at)
+           VALUES ($1, $2, now())
+           ON CONFLICT (message_id, user_id) DO UPDATE
+             SET delivered_at = COALESCE(message_receipts.delivered_at, EXCLUDED.delivered_at)`,
+          [messageId, userId],
+        );
+      },
+
+      async markRead({ messageId, userId }) {
+        await pool.query(
+          `INSERT INTO message_receipts (message_id, user_id, delivered_at, read_at)
+           VALUES ($1, $2, now(), now())
+           ON CONFLICT (message_id, user_id) DO UPDATE
+             SET delivered_at = COALESCE(message_receipts.delivered_at, EXCLUDED.delivered_at),
+                 read_at      = COALESCE(message_receipts.read_at, EXCLUDED.read_at)`,
+          [messageId, userId],
+        );
+      },
+
+      async touchConversationRead({ conversationId, userId }) {
+        await pool.query(
+          `UPDATE conversation_members SET last_read_at = now()
+            WHERE conversation_id=$1 AND user_id=$2`,
+          [conversationId, userId],
+        );
+      },
+    },
+
+    presence: {
+      async ensurePresenceColumns() {
+        await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ`);
+        await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT`);
+        await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT`);
+      },
+
+      async touchLastSeen(userId) {
+        await pool.query(`UPDATE users SET last_seen_at = now() WHERE id = $1`, [userId]);
+      },
+
+      async getPresenceRows(userIds) {
+        const { rows } = await pool.query(
+          `SELECT id, last_seen_at AS "lastSeenAt" FROM users WHERE id = ANY($1::text[])`,
+          [userIds],
+        );
+        return rows;
+      },
+    },
+
     remote: {
       async findRemoteIdByUserId(userId) {
         const { rows } = await pool.query(`SELECT remote_id FROM users WHERE id = $1`, [userId]);

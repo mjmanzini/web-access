@@ -21,8 +21,10 @@
  *   server -> 'receipt' { messageId, userId, kind }
  *   server -> 'typing'  { conversationId, userId, typing }
  */
-import { pool, logEvent } from '../db.js';
+import crypto from 'node:crypto';
+import { logEvent } from '../db.js';
 import { socketAuth } from '../auth/sessions.js';
+import { createStorage } from '../storage/index.js';
 
 export const CHAT_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS conversations (
@@ -65,178 +67,77 @@ CREATE TABLE IF NOT EXISTS message_receipts (
 );
 `;
 
-import crypto from 'node:crypto';
-function uid() { return crypto.randomBytes(8).toString('hex'); }
+function uid() {
+  return crypto.randomBytes(8).toString('hex');
+}
 
-// ---------------------------------------------------------------------------
-// DB helpers
-// ---------------------------------------------------------------------------
-async function findOrCreate1to1(meId, peerId) {
+async function findOrCreate1to1(storage, meId, peerId) {
   if (meId === peerId) throw new Error('cannot_chat_with_self');
-  // Find existing 1:1
-  const { rows } = await pool.query(
-    `SELECT c.id FROM conversations c
-       JOIN conversation_members m1 ON m1.conversation_id=c.id AND m1.user_id=$1
-       JOIN conversation_members m2 ON m2.conversation_id=c.id AND m2.user_id=$2
-      WHERE c.is_group = false
-      LIMIT 1`,
-    [meId, peerId],
-  );
-  if (rows[0]) return rows[0].id;
-  // Create
-  const id = uid();
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    await client.query(
-      `INSERT INTO conversations (id, is_group, created_by) VALUES ($1, false, $2)`,
-      [id, meId],
-    );
-    await client.query(
-      `INSERT INTO conversation_members (conversation_id, user_id) VALUES ($1,$2),($1,$3)`,
-      [id, meId, peerId],
-    );
-    await client.query('COMMIT');
-  } catch (e) {
-    await client.query('ROLLBACK'); throw e;
-  } finally {
-    client.release();
-  }
-  return id;
+  return storage.chat.findOrCreateOneToOneConversation({
+    conversationId: uid(),
+    meId,
+    peerId,
+  });
 }
 
-async function listConversations(userId) {
-  const { rows } = await pool.query(
-    `SELECT c.id, c.is_group, c.title, c.last_msg_at,
-            (SELECT body  FROM chat_messages_v2 m
-              WHERE m.conversation_id=c.id ORDER BY created_at DESC LIMIT 1) AS last_body,
-            (SELECT json_agg(json_build_object('id', u.id, 'displayName', u.display_name))
-               FROM conversation_members cm JOIN users u ON u.id=cm.user_id
-              WHERE cm.conversation_id=c.id AND cm.user_id <> $1) AS members,
-            COALESCE((SELECT COUNT(*) FROM chat_messages_v2 m
-                       LEFT JOIN message_receipts r ON r.message_id=m.id AND r.user_id=$1
-                      WHERE m.conversation_id=c.id AND m.sender_id <> $1
-                        AND r.read_at IS NULL), 0) AS unread
-       FROM conversations c
-       JOIN conversation_members cm ON cm.conversation_id=c.id
-      WHERE cm.user_id = $1
-      ORDER BY c.last_msg_at DESC NULLS LAST, c.created_at DESC`,
-    [userId],
-  );
-  return rows;
+async function listConversations(storage, userId) {
+  return storage.chat.listConversations(userId);
 }
 
-async function listMessages(conversationId, userId, { before, limit = 50 } = {}) {
-  // Authorization
-  const { rows: mem } = await pool.query(
-    `SELECT 1 FROM conversation_members WHERE conversation_id=$1 AND user_id=$2`,
-    [conversationId, userId],
-  );
-  if (!mem[0]) throw new Error('forbidden');
-
-  const params = [conversationId];
-  let where = `conversation_id = $1 AND deleted_at IS NULL`;
-  if (before) { params.push(before); where += ` AND created_at < $${params.length}`; }
-  params.push(Math.min(Number(limit) || 50, 200));
-  const { rows } = await pool.query(
-    `SELECT id, conversation_id AS "conversationId", sender_id AS "senderId",
-            body, client_id AS "clientId", created_at AS "createdAt"
-       FROM chat_messages_v2
-      WHERE ${where}
-      ORDER BY created_at DESC
-      LIMIT $${params.length}`,
-    params,
-  );
-  return rows.reverse();
+async function listMessages(storage, conversationId, userId, { before, limit = 50 } = {}) {
+  return storage.chat.listMessages({ conversationId, userId, before, limit });
 }
 
-async function persistMessage({ conversationId, senderId, body, clientId }) {
-  const id = uid();
+async function persistMessage(storage, { conversationId, senderId, body, clientId }) {
   const text = String(body || '').slice(0, 8000);
   if (!text.trim()) throw new Error('empty_body');
 
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-
-    // Authorization
-    const { rows: mem } = await client.query(
-      `SELECT 1 FROM conversation_members WHERE conversation_id=$1 AND user_id=$2`,
-      [conversationId, senderId],
-    );
-    if (!mem[0]) throw new Error('forbidden');
-
-    const { rows } = await client.query(
-      `INSERT INTO chat_messages_v2 (id, conversation_id, sender_id, body, client_id)
-       VALUES ($1,$2,$3,$4,$5)
-       RETURNING id, conversation_id AS "conversationId", sender_id AS "senderId",
-                 body, client_id AS "clientId", created_at AS "createdAt"`,
-      [id, conversationId, senderId, text, clientId || null],
-    );
-    await client.query(
-      `UPDATE conversations SET last_msg_at = now() WHERE id = $1`,
-      [conversationId],
-    );
-    await client.query('COMMIT');
-    return rows[0];
-  } catch (e) {
-    await client.query('ROLLBACK'); throw e;
-  } finally {
-    client.release();
-  }
+  return storage.chat.persistMessage({
+    messageId: uid(),
+    conversationId,
+    senderId,
+    body: text,
+    clientId,
+  });
 }
 
-async function membersOf(conversationId) {
-  const { rows } = await pool.query(
-    `SELECT user_id AS "userId" FROM conversation_members WHERE conversation_id=$1`,
-    [conversationId],
-  );
-  return rows.map((r) => r.userId);
+async function membersOf(storage, conversationId) {
+  return storage.chat.listConversationMemberIds(conversationId);
 }
 
-async function markDelivered(messageId, userId) {
-  await pool.query(
-    `INSERT INTO message_receipts (message_id, user_id, delivered_at)
-     VALUES ($1, $2, now())
-     ON CONFLICT (message_id, user_id) DO UPDATE
-       SET delivered_at = COALESCE(message_receipts.delivered_at, EXCLUDED.delivered_at)`,
-    [messageId, userId],
-  );
-}
-async function markRead(messageId, userId) {
-  await pool.query(
-    `INSERT INTO message_receipts (message_id, user_id, delivered_at, read_at)
-     VALUES ($1, $2, now(), now())
-     ON CONFLICT (message_id, user_id) DO UPDATE
-       SET delivered_at = COALESCE(message_receipts.delivered_at, EXCLUDED.delivered_at),
-           read_at      = COALESCE(message_receipts.read_at, EXCLUDED.read_at)`,
-    [messageId, userId],
-  );
+async function markDelivered(storage, messageId, userId) {
+  await storage.chat.markDelivered({ messageId, userId });
 }
 
-// ---------------------------------------------------------------------------
-// HTTP routes
-// ---------------------------------------------------------------------------
-export function attachChatRoutes(app, requireAuth) {
+async function markRead(storage, messageId, userId) {
+  await storage.chat.markRead({ messageId, userId });
+}
+
+export function attachChatRoutes(app, requireAuth, storage = createStorage()) {
   app.get('/api/conversations', requireAuth, async (req, res) => {
-    try { res.json({ conversations: await listConversations(req.user.id) }); }
-    catch (e) { res.status(500).json({ error: e.message }); }
+    try {
+      res.json({ conversations: await listConversations(storage, req.user.id) });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
   app.post('/api/conversations', requireAuth, async (req, res) => {
     const { peerUserId } = req.body || {};
     if (!peerUserId) return res.status(400).json({ error: 'peerUserId_required' });
     try {
-      const id = await findOrCreate1to1(req.user.id, peerUserId);
+      const id = await findOrCreate1to1(storage, req.user.id, peerUserId);
       res.json({ id });
-    } catch (e) { res.status(400).json({ error: e.message }); }
+    } catch (e) {
+      res.status(400).json({ error: e.message });
+    }
   });
 
   app.get('/api/conversations/:id/messages', requireAuth, async (req, res) => {
     try {
       const { before, limit } = req.query;
-      const msgs = await listMessages(req.params.id, req.user.id, { before, limit });
-      res.json({ messages: msgs });
+      const messages = await listMessages(storage, req.params.id, req.user.id, { before, limit });
+      res.json({ messages });
     } catch (e) {
       const status = e.message === 'forbidden' ? 403 : 500;
       res.status(status).json({ error: e.message });
@@ -244,10 +145,7 @@ export function attachChatRoutes(app, requireAuth) {
   });
 }
 
-// ---------------------------------------------------------------------------
-// Socket.IO namespace
-// ---------------------------------------------------------------------------
-export function attachChatSignaling(io, users) {
+export function attachChatSignaling(io, users, storage = createStorage()) {
   const nsp = io.of('/chat');
   nsp.use(socketAuth(users));
 
@@ -258,20 +156,19 @@ export function attachChatSignaling(io, users) {
 
     socket.on('send', async ({ conversationId, body, clientId } = {}, ack) => {
       try {
-        const msg = await persistMessage({ conversationId, senderId: me.id, body, clientId });
-        const recipients = (await membersOf(conversationId)).filter((u) => u !== me.id);
+        const msg = await persistMessage(storage, { conversationId, senderId: me.id, body, clientId });
+        const recipients = (await membersOf(storage, conversationId)).filter((userId) => userId !== me.id);
 
-        // Echo to sender (so all of their devices update + ack)
         ack?.({ ok: true, message: msg });
         nsp.to(`user:${me.id}`).emit('message', msg);
 
-        // Fan out to recipients; mark delivered when their socket actually receives
-        for (const uid of recipients) {
-          nsp.to(`user:${uid}`).emit('message', msg);
-          // Optimistic delivered receipt — server-side as soon as fan-out happens
-          markDelivered(msg.id, uid).catch(() => {});
+        for (const userId of recipients) {
+          nsp.to(`user:${userId}`).emit('message', msg);
+          markDelivered(storage, msg.id, userId).catch(() => {});
           nsp.to(`user:${me.id}`).emit('receipt', {
-            messageId: msg.id, userId: uid, kind: 'delivered',
+            messageId: msg.id,
+            userId,
+            kind: 'delivered',
           });
         }
       } catch (e) {
@@ -281,31 +178,35 @@ export function attachChatSignaling(io, users) {
 
     socket.on('typing', async ({ conversationId, typing } = {}) => {
       try {
-        const recipients = (await membersOf(conversationId)).filter((u) => u !== me.id);
-        for (const uid of recipients) {
-          nsp.to(`user:${uid}`).emit('typing', {
-            conversationId, userId: me.id, typing: !!typing,
+        const recipients = (await membersOf(storage, conversationId)).filter((userId) => userId !== me.id);
+        for (const userId of recipients) {
+          nsp.to(`user:${userId}`).emit('typing', {
+            conversationId,
+            userId: me.id,
+            typing: !!typing,
           });
         }
-      } catch { /* ignore */ }
+      } catch {
+        // ignore typing failures
+      }
     });
 
     socket.on('read', async ({ conversationId, messageId } = {}) => {
       if (!conversationId || !messageId) return;
       try {
-        await markRead(messageId, me.id);
-        await pool.query(
-          `UPDATE conversation_members SET last_read_at = now()
-            WHERE conversation_id=$1 AND user_id=$2`,
-          [conversationId, me.id],
-        );
-        const recipients = (await membersOf(conversationId)).filter((u) => u !== me.id);
-        for (const uid of recipients) {
-          nsp.to(`user:${uid}`).emit('receipt', {
-            messageId, userId: me.id, kind: 'read',
+        await markRead(storage, messageId, me.id);
+        await storage.chat.touchConversationRead({ conversationId, userId: me.id });
+        const recipients = (await membersOf(storage, conversationId)).filter((userId) => userId !== me.id);
+        for (const userId of recipients) {
+          nsp.to(`user:${userId}`).emit('receipt', {
+            messageId,
+            userId: me.id,
+            kind: 'read',
           });
         }
-      } catch { /* ignore */ }
+      } catch {
+        // ignore read receipt failures
+      }
     });
   });
 }
