@@ -51,6 +51,7 @@ This is the best match for the current repo.
 
 Related docs:
 - [docs/DEPLOY-CLOUDFLARE.md](c:/Users/Jastice/Documents/web-access/docs/DEPLOY-CLOUDFLARE.md)
+- [docs/DEPLOY-ORACLE-FREE.md](c:/Users/Jastice/Documents/web-access/docs/DEPLOY-ORACLE-FREE.md)
 - [infra/README.md](c:/Users/Jastice/Documents/web-access/infra/README.md)
 
 ### Option B: Full stack on one VPS

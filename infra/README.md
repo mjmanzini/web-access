@@ -71,10 +71,7 @@ To provision the `production` GitHub environment values used by
 
 ```powershell
 pwsh ./scripts/setup-github-deploy.ps1 \
-   -DeployHost "your-vps-host" \
-   -DeployUser "ubuntu" \
    -DeployPath "/home/ubuntu/web-access" \
-   -DeployKeyPath "$HOME/.ssh/id_ed25519" \
    -WebUrl "https://example.com" \
    -SignalUrl "https://signal.example.com"
 ```
