@@ -25,16 +25,40 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     steps:
-      - name: Configure SSH
+      - name: Validate deploy configuration
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
         run: |
+          set -euo pipefail
+          missing=0
+          for name in DEPLOY_HOST DEPLOY_USER DEPLOY_SSH_KEY DEPLOY_PATH; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error title=Missing deploy secret::${name} is not configured for the production environment."
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Configure SSH
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
-          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_deploy
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_deploy
           chmod 600 ~/.ssh/id_deploy
-          if [ -n "${{ secrets.DEPLOY_KNOWN_HOSTS }}" ]; then
-            echo "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          if [ -n "${DEPLOY_KNOWN_HOSTS:-}" ]; then
+            printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
           else
-            ssh-keyscan -H "${{ secrets.DEPLOY_HOST }}" > ~/.ssh/known_hosts 2>/dev/null
+            ssh-keyscan -H "$DEPLOY_HOST" > ~/.ssh/known_hosts 2>/dev/null
           fi
           chmod 600 ~/.ssh/known_hosts
 
