@@ -156,6 +156,7 @@ Status now:
 - `storage/postgres.js` is the active implementation
 - `storage/firebase.js` now initializes Firebase Admin + Firestore and exposes the same method surface
 - Firebase now has working implementations for `users.*`, `auth.issueSessionToken`, `auth.findUserByUsername`, `auth.findUserByEmail`, and `auth.updateUserEmail`
+- Firebase now also has working implementations for OAuth identity linking and the WebAuthn-backed `storage.auth` methods used by `oauth.js` and `webauthn.js`
 - runtime default remains `STORAGE_BACKEND=postgres`
 
 The rest of the server should stop importing `pool` directly.

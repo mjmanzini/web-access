@@ -36,8 +36,9 @@ $env:STORAGE_BACKEND='postgres'
 
 A Firebase Admin-backed adapter base now exists at `src/storage/firebase.js`.
 It can initialize Firebase and Firestore, and it now implements the user
-directory plus session-token basics used by `users.js`. Other storage groups
-are still being implemented. Select it with:
+directory, session-token basics, OAuth identity linking, and the WebAuthn
+storage methods used by the auth routes. Other storage groups are still being
+implemented. Select it with:
 
 ```powershell
 $env:STORAGE_BACKEND='firebase'

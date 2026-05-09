@@ -69,6 +69,14 @@ function authCredentialCollection(db) {
   return db.collection('authCredentials');
 }
 
+function authChallengeCollection(db) {
+  return db.collection('authChallenges');
+}
+
+function oauthIdentityCollection(db) {
+  return db.collection('oauthIdentities');
+}
+
 function mapUserDoc(doc) {
   if (!doc?.exists) return null;
   const data = doc.data() || {};
@@ -81,6 +89,33 @@ function mapUserDoc(doc) {
 
 function sessionCredentialId(tokenHash) {
   return `session:${encodeBinary(tokenHash)}`;
+}
+
+function webauthnCredentialId(credentialId) {
+  return `webauthn:${encodeBinary(credentialId)}`;
+}
+
+function oauthIdentityId(provider, providerUserId) {
+  return `${String(provider)}:${String(providerUserId)}`;
+}
+
+function challengeScope(userId) {
+  return userId == null ? '__global__' : `user:${String(userId)}`;
+}
+
+function mapWebauthnCredentialDoc(doc) {
+  if (!doc?.exists) return null;
+  const data = doc.data() || {};
+  return {
+    id: doc.id,
+    user_id: data.userId || null,
+    webauthn_cred_id: Buffer.from(String(data.webauthnCredId || ''), 'base64url'),
+    webauthn_pubkey: Buffer.from(String(data.webauthnPubkey || ''), 'base64url'),
+    webauthn_counter: Number(data.webauthnCounter || 0),
+    webauthn_transports: data.webauthnTransports ?? null,
+    username: data.username || null,
+    displayName: data.displayName || null,
+  };
 }
 
 async function getUserById(db, id) {
@@ -242,6 +277,39 @@ export function createFirebaseStorage() {
     });
   }
 
+  async function saveChallenge({ userId, challenge, purpose }) {
+    const { db } = getFirebaseContext();
+    await authChallengeCollection(db).add({
+      userId: userId == null ? null : String(userId),
+      userScope: challengeScope(userId),
+      purpose: String(purpose),
+      challenge: encodeBinary(challenge),
+      createdAt: FieldValue.serverTimestamp(),
+      expiresAt: Timestamp.fromDate(new Date(Date.now() + (5 * 60 * 1000))),
+    });
+  }
+
+  async function consumeChallenge({ userId, purpose }) {
+    const { db } = getFirebaseContext();
+    const snap = await authChallengeCollection(db)
+      .where('userScope', '==', challengeScope(userId))
+      .where('purpose', '==', String(purpose))
+      .orderBy('createdAt', 'desc')
+      .limit(10)
+      .get();
+
+    const now = Date.now();
+    for (const doc of snap.docs) {
+      const data = doc.data() || {};
+      const expiresAt = coerceDate(data.expiresAt);
+      if (expiresAt && expiresAt.getTime() <= now) continue;
+      await doc.ref.delete();
+      return Buffer.from(String(data.challenge || ''), 'base64url');
+    }
+
+    return null;
+  }
+
   async function findUserByUsername(username) {
     const { db } = getFirebaseContext();
     const usernameSnap = await usernameCollection(db).doc(normalizeUsernameKey(username)).get();
@@ -249,6 +317,98 @@ export function createFirebaseStorage() {
     const data = usernameSnap.data() || {};
     if (!data.userId) return null;
     return getUserById(db, data.userId);
+  }
+
+  async function getRegistrationOptionsContext(userId) {
+    const { db } = getFirebaseContext();
+    const [user, credentials] = await Promise.all([
+      getUserById(db, userId),
+      authCredentialCollection(db)
+        .where('credentialType', '==', 'webauthn')
+        .where('userId', '==', String(userId))
+        .get(),
+    ]);
+
+    return {
+      user,
+      credentials: credentials.docs.map((doc) => {
+        const data = doc.data() || {};
+        return {
+          webauthn_cred_id: Buffer.from(String(data.webauthnCredId || ''), 'base64url'),
+          webauthn_transports: data.webauthnTransports ?? null,
+        };
+      }),
+    };
+  }
+
+  async function listUserWebauthnCredentials(userId) {
+    const { db } = getFirebaseContext();
+    const snap = await authCredentialCollection(db)
+      .where('credentialType', '==', 'webauthn')
+      .where('userId', '==', String(userId))
+      .get();
+    return snap.docs.map((doc) => {
+      const data = doc.data() || {};
+      return {
+        webauthn_cred_id: Buffer.from(String(data.webauthnCredId || ''), 'base64url'),
+        webauthn_transports: data.webauthnTransports ?? null,
+      };
+    });
+  }
+
+  async function upsertWebauthnCredential({ userId, credentialId, publicKey, counter, transports, deviceLabel }) {
+    const { db } = getFirebaseContext();
+    const user = await getUserById(db, userId);
+    const ref = authCredentialCollection(db).doc(webauthnCredentialId(credentialId));
+    const existing = await ref.get();
+    const current = existing.exists ? existing.data() || {} : {};
+    await ref.set({
+      userId: String(userId),
+      credentialType: 'webauthn',
+      webauthnCredId: encodeBinary(credentialId),
+      webauthnPubkey: encodeBinary(publicKey),
+      webauthnCounter: Number(counter || 0),
+      webauthnTransports: transports ?? null,
+      deviceLabel: deviceLabel ?? current.deviceLabel ?? null,
+      username: user?.username || current.username || null,
+      displayName: user?.displayName || current.displayName || null,
+      createdAt: current.createdAt || FieldValue.serverTimestamp(),
+      lastUsedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+  }
+
+  async function findAuthenticationCredential(credentialId) {
+    const { db } = getFirebaseContext();
+    const doc = await authCredentialCollection(db).doc(webauthnCredentialId(credentialId)).get();
+    const credential = mapWebauthnCredentialDoc(doc);
+    if (!credential || credential.user_id == null) return null;
+
+    if (!credential.username || !credential.displayName) {
+      const user = await getUserById(db, credential.user_id);
+      if (user) {
+        credential.username = credential.username || user.username;
+        credential.displayName = credential.displayName || user.displayName;
+      }
+    }
+
+    return credential;
+  }
+
+  async function updateWebauthnCounter({ credentialRowId, newCounter }) {
+    const { db } = getFirebaseContext();
+    await authCredentialCollection(db).doc(String(credentialRowId)).set({
+      webauthnCounter: Number(newCounter || 0),
+      lastUsedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+  }
+
+  async function findOwnedAuthenticationCredential({ userId, credentialId }) {
+    const doc = await authCredentialCollection(getFirebaseContext().db)
+      .doc(webauthnCredentialId(credentialId))
+      .get();
+    const credential = mapWebauthnCredentialDoc(doc);
+    if (!credential || credential.user_id !== String(userId)) return null;
+    return credential;
   }
 
   async function findUserByEmail(email) {
@@ -269,6 +429,56 @@ export function createFirebaseStorage() {
     }, { merge: true });
   }
 
+  async function findOAuthIdentityUser({ provider, providerUserId }) {
+    const { db } = getFirebaseContext();
+    const snap = await oauthIdentityCollection(db)
+      .doc(oauthIdentityId(provider, providerUserId))
+      .get();
+    if (!snap.exists) return null;
+
+    const data = snap.data() || {};
+    if (!data.userId) return null;
+    return getUserById(db, data.userId);
+  }
+
+  async function touchOAuthIdentityLogin({ provider, providerUserId }) {
+    const { db } = getFirebaseContext();
+    await oauthIdentityCollection(db)
+      .doc(oauthIdentityId(provider, providerUserId))
+      .set({
+        lastLoginAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
+  }
+
+  async function upsertOAuthIdentity({ provider, providerUserId, userId, email }) {
+    const { db } = getFirebaseContext();
+    await oauthIdentityCollection(db)
+      .doc(oauthIdentityId(provider, providerUserId))
+      .set({
+        provider: String(provider),
+        providerUserId: String(providerUserId),
+        userId: String(userId),
+        email: email || null,
+        emailLower: email ? normalizeEmailKey(email) : null,
+        lastLoginAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
+  }
+
+  async function createOAuthIdentity({ provider, providerUserId, userId, email }) {
+    const { db } = getFirebaseContext();
+    await oauthIdentityCollection(db)
+      .doc(oauthIdentityId(provider, providerUserId))
+      .create({
+        provider: String(provider),
+        providerUserId: String(providerUserId),
+        userId: String(userId),
+        email: email || null,
+        emailLower: email ? normalizeEmailKey(email) : null,
+        createdAt: FieldValue.serverTimestamp(),
+        lastLoginAt: FieldValue.serverTimestamp(),
+      });
+  }
+
   return {
     users: {
       createUser,
@@ -280,21 +490,21 @@ export function createFirebaseStorage() {
     },
 
     auth: {
-      saveChallenge: buildAsyncNotImplemented('auth', 'saveChallenge'),
-      consumeChallenge: buildAsyncNotImplemented('auth', 'consumeChallenge'),
+      saveChallenge,
+      consumeChallenge,
       issueSessionToken,
       findUserByUsername,
-      getRegistrationOptionsContext: buildAsyncNotImplemented('auth', 'getRegistrationOptionsContext'),
-      listUserWebauthnCredentials: buildAsyncNotImplemented('auth', 'listUserWebauthnCredentials'),
-      upsertWebauthnCredential: buildAsyncNotImplemented('auth', 'upsertWebauthnCredential'),
-      findAuthenticationCredential: buildAsyncNotImplemented('auth', 'findAuthenticationCredential'),
-      updateWebauthnCounter: buildAsyncNotImplemented('auth', 'updateWebauthnCounter'),
-      findOwnedAuthenticationCredential: buildAsyncNotImplemented('auth', 'findOwnedAuthenticationCredential'),
-      findOAuthIdentityUser: buildAsyncNotImplemented('auth', 'findOAuthIdentityUser'),
-      touchOAuthIdentityLogin: buildAsyncNotImplemented('auth', 'touchOAuthIdentityLogin'),
+      getRegistrationOptionsContext,
+      listUserWebauthnCredentials,
+      upsertWebauthnCredential,
+      findAuthenticationCredential,
+      updateWebauthnCounter,
+      findOwnedAuthenticationCredential,
+      findOAuthIdentityUser,
+      touchOAuthIdentityLogin,
       findUserByEmail,
-      upsertOAuthIdentity: buildAsyncNotImplemented('auth', 'upsertOAuthIdentity'),
-      createOAuthIdentity: buildAsyncNotImplemented('auth', 'createOAuthIdentity'),
+      upsertOAuthIdentity,
+      createOAuthIdentity,
       updateUserEmail,
     },
 
