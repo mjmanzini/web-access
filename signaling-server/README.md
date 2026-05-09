@@ -34,14 +34,26 @@ The signaling server still defaults to Postgres-backed storage:
 $env:STORAGE_BACKEND='postgres'
 ```
 
-A Firebase adapter scaffold now exists at `src/storage/firebase.js`, but it is
-not implemented yet. You can select it to verify backend wiring only:
+A Firebase Admin-backed adapter base now exists at `src/storage/firebase.js`.
+It can initialize Firebase and Firestore, and it now implements the user
+directory plus session-token basics used by `users.js`. Other storage groups
+are still being implemented. Select it with:
 
 ```powershell
 $env:STORAGE_BACKEND='firebase'
 ```
 
-When selected today, storage calls fail with explicit `not implemented` errors.
+Provide credentials either through `GOOGLE_APPLICATION_CREDENTIALS` or with
+inline service-account env vars:
+
+```powershell
+$env:FIREBASE_PROJECT_ID='your-project-id'
+$env:FIREBASE_CLIENT_EMAIL='firebase-adminsdk-...@your-project-id.iam.gserviceaccount.com'
+$env:FIREBASE_PRIVATE_KEY='-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n'
+```
+
+When selected today, Firebase initialization works, `meta.assertReady()` can
+verify the config, and unimplemented storage methods still fail explicitly.
 
 ## HTTP API
 

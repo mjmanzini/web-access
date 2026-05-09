@@ -154,7 +154,8 @@ Suggested shape:
 Status now:
 
 - `storage/postgres.js` is the active implementation
-- `storage/firebase.js` exists as a scaffold with matching method surface
+- `storage/firebase.js` now initializes Firebase Admin + Firestore and exposes the same method surface
+- Firebase now has working implementations for `users.*`, `auth.issueSessionToken`, `auth.findUserByUsername`, `auth.findUserByEmail`, and `auth.updateUserEmail`
 - runtime default remains `STORAGE_BACKEND=postgres`
 
 The rest of the server should stop importing `pool` directly.
