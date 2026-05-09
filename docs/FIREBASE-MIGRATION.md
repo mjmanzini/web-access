@@ -157,7 +157,14 @@ Status now:
 - `storage/firebase.js` now initializes Firebase Admin + Firestore and exposes the same method surface
 - Firebase now has working implementations for `users.*`, `auth.issueSessionToken`, `auth.findUserByUsername`, `auth.findUserByEmail`, and `auth.updateUserEmail`
 - Firebase now also has working implementations for OAuth identity linking and the WebAuthn-backed `storage.auth` methods used by `oauth.js` and `webauthn.js`
+- Firebase now also has working implementations for the current `storage.chat.*`, `storage.presence.*`, and `storage.remote.*` methods used by the server routes
 - runtime default remains `STORAGE_BACKEND=postgres`
+
+Remaining work is no longer the adapter surface itself. The main outstanding items are:
+
+- validating the Firebase-backed flows against a real project and Firestore rules/indexes
+- deciding whether to keep or revise the Firestore collection layout before production data lands
+- wiring actual Firebase project deployment and secrets for App Hosting + Cloud Run
 
 The rest of the server should stop importing `pool` directly.
 
