@@ -29,6 +29,7 @@ const USE_HTTPS = process.env.HTTPS === '1' || process.env.HTTPS === 'true';
 const WEBAUTHN_ORIGIN = process.env.WEBAUTHN_ORIGIN || process.env.CLIENT_URL || 'http://localhost:3000';
 const WEBAUTHN_RP_NAME = process.env.WEBAUTHN_RP_NAME || 'Web-Access';
 const WEBAUTHN_RP_ID = process.env.WEBAUTHN_RP_ID || new URL(WEBAUTHN_ORIGIN).hostname;
+let dbReady = true;
 
 const app = express();
 app.use(cors({ origin: CORS_ORIGIN }));
@@ -40,7 +41,7 @@ const users = new UserRegistry();
 app.use(authMiddleware(users));
 
 app.get('/healthz', (_req, res) => {
-  res.json({ ok: true, sessions: pairing.size() });
+  res.json({ ok: true, sessions: pairing.size(), dbReady });
 });
 
 attachUserRoutes(app, users);
@@ -108,11 +109,13 @@ attachCallSignaling(io);
 attachUserSignaling(io, users);
 
 await initDb().catch((e) => {
+  dbReady = false;
   console.error('[signaling] database unreachable — is Postgres running? (docker compose up -d postgres)');
   console.error('[signaling] details:', e.message);
-  process.exit(1);
 });
-await ensureLastSeenColumn().catch(() => {});
+if (dbReady) {
+  await ensureLastSeenColumn().catch(() => {});
+}
 
 server.listen(PORT, () => {
   const scheme = USE_HTTPS ? 'https' : 'http';

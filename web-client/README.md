@@ -54,7 +54,7 @@ $env:CLOUDFLARE_ACCOUNT_ID='...'
 If you just need a temporary public signaling URL, start a quick tunnel first:
 
 ```powershell
-.\scripts\start-tunnel.ps1 -ServiceUrl 'http://host.docker.internal:8088'
+.\scripts\start-tunnel.ps1 -ServiceUrl 'http://host.docker.internal:4000'
 ```
 
 Then redeploy Pages with the `https://...trycloudflare.com` URL that script prints.
