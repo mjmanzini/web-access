@@ -62,6 +62,25 @@ Then redeploy Pages with the `https://...trycloudflare.com` URL that script prin
 The remote desktop session route uses `/remote?sessionId=...` so the app stays
 compatible with static hosting.
 
+## Firebase App Hosting
+
+This app can also be deployed from `web-client/` to Firebase App Hosting.
+
+Suggested backend settings:
+
+```text
+Root directory: web-client
+Live branch: main
+```
+
+The repo includes [apphosting.yaml](c:/Users/Jastice/Documents/web-access/web-client/apphosting.yaml) for App Hosting configuration.
+
+Required environment variable:
+
+```env
+NEXT_PUBLIC_SIGNALING_URL=https://signal.example.com
+```
+
 ## What's here (Phase 1)
 
 - `app/page.tsx` — pairing form + WebRTC viewer (`RTCPeerConnection` + video `<video>`)

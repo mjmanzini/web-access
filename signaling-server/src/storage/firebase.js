@@ -429,6 +429,20 @@ export function createFirebaseStorage() {
     }, { merge: true });
   }
 
+  async function updateUserContact({ userId, email, phone }) {
+    const { db } = getFirebaseContext();
+    await userCollection(db).doc(String(userId)).set({
+      ...(email !== undefined ? {
+        email: email || null,
+        emailLower: email ? normalizeEmailKey(email) : null,
+      } : {}),
+      ...(phone !== undefined ? {
+        phone: phone || null,
+      } : {}),
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+  }
+
   async function findOAuthIdentityUser({ provider, providerUserId }) {
     const { db } = getFirebaseContext();
     const snap = await oauthIdentityCollection(db)
@@ -506,6 +520,7 @@ export function createFirebaseStorage() {
       upsertOAuthIdentity,
       createOAuthIdentity,
       updateUserEmail,
+      updateUserContact,
     },
 
     chat: {

@@ -227,6 +227,13 @@ export function createPostgresStorage() {
       async updateUserEmail({ userId, email }) {
         await pool.query(`UPDATE users SET email = $2 WHERE id = $1`, [userId, email]);
       },
+
+      async updateUserContact({ userId, email, phone }) {
+        await pool.query(
+          `UPDATE users SET email = COALESCE($2,email), phone = COALESCE($3,phone) WHERE id = $1`,
+          [userId, email || null, phone || null],
+        );
+      },
     },
 
     chat: {

@@ -8,7 +8,7 @@
  * token compatible with the existing users.loginByToken middleware.
  */
 import crypto from 'node:crypto';
-import { pool } from '../db.js';
+import { createStorage } from '../storage/index.js';
 
 function deriveUsername({ username, email, phone, displayName }) {
   if (username) return username;
@@ -18,7 +18,7 @@ function deriveUsername({ username, email, phone, displayName }) {
   return 'u' + crypto.randomBytes(4).toString('hex');
 }
 
-export function attachAuthRoutes(app, users) {
+export function attachAuthRoutes(app, users, storage = createStorage()) {
   app.post('/api/auth/register', async (req, res) => {
     const { displayName, email, phone, username } = req.body || {};
     if (!displayName || String(displayName).trim().length < 2) {
@@ -41,13 +41,14 @@ export function attachAuthRoutes(app, users) {
       try {
         const candidate = attempt === 0 ? uname : `${uname}.${crypto.randomBytes(2).toString('hex')}`;
         const u = await users.register({ username: candidate, displayName });
-        // Best-effort: stash email/phone if those columns exist (new schema).
+        // Best-effort: persist contact details when the active storage backend supports them.
         try {
-          await pool.query(
-            `UPDATE users SET email = COALESCE($2,email), phone = COALESCE($3,phone) WHERE id = $1`,
-            [u.id, email || null, phone || null],
-          );
-        } catch { /* legacy schema without email/phone */ }
+          await storage.auth.updateUserContact({
+            userId: u.id,
+            email: email || null,
+            phone: phone || null,
+          });
+        } catch { /* legacy backend without contact fields */ }
         return res.json(u);
       } catch (e) {
         if (e.message !== 'username_taken') {

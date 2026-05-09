@@ -1,0 +1,13 @@
+runConfig:
+  minInstances: 0
+  maxInstances: 5
+  concurrency: 80
+  cpu: 1
+  memoryMiB: 512
+
+env:
+  - variable: NEXT_PUBLIC_SIGNALING_URL
+    value: https://signal.example.com
+    availability:
+      - BUILD
+      - RUNTIME

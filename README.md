@@ -40,4 +40,5 @@ desktop stream appears.
 - Cheapest practical frontend hosting: [docs/DEPLOY-CLOUDFLARE.md](c:/Users/Jastice/Documents/web-access/docs/DEPLOY-CLOUDFLARE.md)
 - Free-hosting tradeoffs and recommended split: [docs/FREE-HOSTING.md](c:/Users/Jastice/Documents/web-access/docs/FREE-HOSTING.md)
 - Cheapest full-stack path: [docs/DEPLOY-ORACLE-FREE.md](c:/Users/Jastice/Documents/web-access/docs/DEPLOY-ORACLE-FREE.md)
+- Firebase full-stack deployment prep: [docs/DEPLOY-FIREBASE.md](c:/Users/Jastice/Documents/web-access/docs/DEPLOY-FIREBASE.md)
 - Firebase migration plan: [docs/FIREBASE-MIGRATION.md](c:/Users/Jastice/Documents/web-access/docs/FIREBASE-MIGRATION.md)
