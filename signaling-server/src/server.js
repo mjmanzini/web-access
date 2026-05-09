@@ -13,6 +13,7 @@ import { initDb, registerExtraSchema } from './db.js';
 import { authMiddleware, requireAuth } from './auth/sessions.js';
 import { attachAuthRoutes } from './auth/register.js';
 import { mountWebAuthn, WEBAUTHN_SCHEMA_SQL } from './auth/webauthn.js';
+import { mountOAuth, OAUTH_SCHEMA_SQL } from './auth/oauth.js';
 import {
   CHAT_SCHEMA_SQL, attachChatRoutes, attachChatSignaling,
 } from './chat/messages.js';
@@ -49,7 +50,14 @@ mountWebAuthn(app, {
   rpName: WEBAUTHN_RP_NAME,
   origin: WEBAUTHN_ORIGIN,
 });
+mountOAuth(app, {
+  clientUrl: process.env.CLIENT_URL || WEBAUTHN_ORIGIN,
+  callbackBase: process.env.OAUTH_CALLBACK_BASE
+    || process.env.PUBLIC_SIGNALING_URL
+    || `http://localhost:${PORT}`,
+});
 attachChatRoutes(app, requireAuth);
+registerExtraSchema(OAUTH_SCHEMA_SQL);
 attachPresenceRoutes(app, users, requireAuth);
 attachRemoteRoutes(app, pairing, users, requireAuth);
 

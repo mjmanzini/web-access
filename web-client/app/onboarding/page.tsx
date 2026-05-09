@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { webauthn } from '../../lib/auth/webauthn-client';
-import { api, loginWithToken, saveStoredUser, type StoredUser } from '../../lib/user-session';
+import { api, loginWithToken, saveStoredUser, signalingUrl, type StoredUser } from '../../lib/user-session';
 
 /**
  * Frictionless 2-step onboarding:
@@ -21,12 +21,24 @@ export default function OnboardingPage() {
   const [biomWanted, setBiomWanted] = useState(false);
   const [biomDone, setBiomDone] = useState(false);
   const [biomSupported, setBiomSupported] = useState<boolean | null>(null);
+  const [providers, setProviders] = useState<{ id: string; label: string }[]>([]);
 
   useEffect(() => {
     Promise.all([webauthn.isSupported(), webauthn.hasPlatformAuthenticator()])
       .then(([supported, platform]) => setBiomSupported(supported && platform))
       .catch(() => setBiomSupported(false));
   }, []);
+
+  useEffect(() => {
+    fetch(`${signalingUrl()}/api/auth/oauth/providers`)
+      .then((r) => (r.ok ? r.json() : { providers: [] }))
+      .then((j) => setProviders(Array.isArray(j.providers) ? j.providers : []))
+      .catch(() => setProviders([]));
+  }, []);
+
+  const startOAuth = (providerId: string) => {
+    window.location.href = `${signalingUrl()}/api/auth/oauth/${providerId}/start?return=/chat`;
+  };
 
   const next = () => {
     setErr(null);
@@ -98,6 +110,38 @@ export default function OnboardingPage() {
           <>
             <h1>Welcome 👋</h1>
             <p className="sub">What should we call you?</p>
+            {providers.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 14 }}>
+                {providers.map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => startOAuth(p.id)}
+                    disabled={busy}
+                    style={{
+                      width: '100%', height: 44, borderRadius: 8,
+                      background: '#fff', color: '#111',
+                      border: '1px solid var(--wa-line)',
+                      fontWeight: 600, display: 'flex', alignItems: 'center',
+                      justifyContent: 'center', gap: 10,
+                    }}
+                  >
+                    <span aria-hidden style={{ fontSize: 18 }}>
+                      {p.id === 'google' ? 'G' : p.id === 'github' ? '⌥' : '◎'}
+                    </span>
+                    Continue with {p.label}
+                  </button>
+                ))}
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 10,
+                  color: 'var(--wa-text-muted)', fontSize: 12, margin: '4px 0',
+                }}>
+                  <span style={{ flex: 1, height: 1, background: 'var(--wa-line)' }} />
+                  or
+                  <span style={{ flex: 1, height: 1, background: 'var(--wa-line)' }} />
+                </div>
+              </div>
+            )}
             {biomSupported && (
               <button
                 type="button"

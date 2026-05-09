@@ -14,6 +14,14 @@ npm install
 npm start
 ```
 
+For local desktop development, use:
+
+```powershell
+npm run start:local
+```
+
+That script forces `SIGNALING_URL=http://localhost:4000` and `CLIENT_URL=http://localhost:3000`, so it ignores any tunnel values currently stored in `.env`.
+
 ### Vendor scripts
 
 The renderer loads `qrcode` and `socket.io-client` from `src/renderer/vendor/`

@@ -1,5 +1,8 @@
 name: ci
 
+permissions:
+  contents: read
+
 on:
   pull_request:
   push:
@@ -18,6 +21,9 @@ jobs:
           cache-dependency-path: signaling-server/package-lock.json
       - run: npm ci
         working-directory: signaling-server
+      - name: Audit production dependencies
+        working-directory: signaling-server
+        run: npm audit --omit=dev
       - name: Syntax check all JS modules
         working-directory: signaling-server
         run: |
@@ -34,6 +40,9 @@ jobs:
             import('./src/chat/presence.js'),
             import('./src/remote/sessions.js')
           ]).then(()=>console.log('OK'))"
+      - name: Run unit tests
+        working-directory: signaling-server
+        run: npm test
 
   web-client:
     name: web-client
@@ -47,6 +56,9 @@ jobs:
           cache-dependency-path: web-client/package-lock.json
       - run: npm ci
         working-directory: web-client
+      - name: Audit production dependencies
+        working-directory: web-client
+        run: npm audit --omit=dev
       - name: Build (production)
         working-directory: web-client
         env:

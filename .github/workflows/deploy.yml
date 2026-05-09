@@ -44,8 +44,9 @@ jobs:
           USER: ${{ secrets.DEPLOY_USER }}
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
         run: |
-          ssh -i ~/.ssh/id_deploy "$USER@$HOST" bash -se <<'EOF'
+          ssh -i ~/.ssh/id_deploy "$USER@$HOST" "bash -se -- '$DEPLOY_PATH'" <<'EOF'
             set -euo pipefail
+            DEPLOY_PATH="$1"
             cd "$DEPLOY_PATH"
             echo "[deploy] git pull"
             git fetch --all --prune
