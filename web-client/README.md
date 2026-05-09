@@ -43,6 +43,22 @@ Required environment variable:
 NEXT_PUBLIC_SIGNALING_URL=https://signal.example.com
 ```
 
+Repeatable deploy from the repo root:
+
+```powershell
+$env:CLOUDFLARE_API_TOKEN='...'
+$env:CLOUDFLARE_ACCOUNT_ID='...'
+.\scripts\deploy-pages.ps1 -SignalingUrl 'https://your-signal-url.example.com'
+```
+
+If you just need a temporary public signaling URL, start a quick tunnel first:
+
+```powershell
+.\scripts\start-tunnel.ps1 -ServiceUrl 'http://host.docker.internal:8088'
+```
+
+Then redeploy Pages with the `https://...trycloudflare.com` URL that script prints.
+
 The remote desktop session route uses `/remote?sessionId=...` so the app stays
 compatible with static hosting.
 
