@@ -56,6 +56,131 @@ export function createPostgresStorage() {
       },
     },
 
+    auth: {
+      async saveChallenge({ userId, challenge, purpose }) {
+        await pool.query(
+          `INSERT INTO webauthn_challenges (user_id, challenge, purpose) VALUES ($1, $2, $3)`,
+          [userId, challenge, purpose],
+        );
+      },
+
+      async consumeChallenge({ userId, purpose }) {
+        const { rows } = await pool.query(
+          `DELETE FROM webauthn_challenges
+            WHERE id = (
+              SELECT id
+                FROM webauthn_challenges
+               WHERE (($1::text IS NULL AND user_id IS NULL) OR user_id = $1)
+                 AND purpose = $2
+                 AND expires_at > now()
+               ORDER BY created_at DESC
+               LIMIT 1
+            )
+            RETURNING challenge`,
+          [userId, purpose],
+        );
+        return rows[0]?.challenge || null;
+      },
+
+      async issueSessionToken({ userId, tokenHash, ttlSeconds }) {
+        await pool.query(
+          `INSERT INTO auth_credentials (user_id, credential_type, token_hash, expires_at)
+           VALUES ($1, 'session', $2, now() + make_interval(secs => $3))`,
+          [userId, tokenHash, ttlSeconds],
+        );
+      },
+
+      async findUserByUsername(username) {
+        const { rows } = await pool.query(
+          `SELECT id, username, display_name AS "displayName" FROM users WHERE lower(username) = lower($1)`,
+          [username],
+        );
+        return rows[0] || null;
+      },
+
+      async getRegistrationOptionsContext(userId) {
+        const [userRes, credsRes] = await Promise.all([
+          pool.query(`SELECT username, display_name AS "displayName" FROM users WHERE id = $1`, [userId]),
+          pool.query(
+            `SELECT webauthn_cred_id, webauthn_transports
+               FROM auth_credentials
+              WHERE user_id = $1 AND credential_type = 'webauthn'`,
+            [userId],
+          ),
+        ]);
+
+        return {
+          user: userRes.rows[0] || null,
+          credentials: credsRes.rows,
+        };
+      },
+
+      async listUserWebauthnCredentials(userId) {
+        const { rows } = await pool.query(
+          `SELECT webauthn_cred_id, webauthn_transports
+             FROM auth_credentials
+            WHERE user_id = $1 AND credential_type = 'webauthn'`,
+          [userId],
+        );
+        return rows;
+      },
+
+      async upsertWebauthnCredential({
+        userId,
+        credentialId,
+        publicKey,
+        counter,
+        transports,
+        deviceLabel,
+      }) {
+        await pool.query(
+          `INSERT INTO auth_credentials (
+             user_id, credential_type, webauthn_cred_id, webauthn_pubkey,
+             webauthn_counter, webauthn_transports, device_label, last_used_at
+           ) VALUES ($1, 'webauthn', $2, $3, $4, $5, $6, now())
+           ON CONFLICT (webauthn_cred_id)
+           DO UPDATE SET
+             webauthn_pubkey = EXCLUDED.webauthn_pubkey,
+             webauthn_counter = EXCLUDED.webauthn_counter,
+             webauthn_transports = EXCLUDED.webauthn_transports,
+             device_label = COALESCE(EXCLUDED.device_label, auth_credentials.device_label),
+             last_used_at = now()`,
+          [userId, credentialId, publicKey, counter, transports, deviceLabel],
+        );
+      },
+
+      async findAuthenticationCredential(credentialId) {
+        const { rows } = await pool.query(
+          `SELECT ac.id, ac.user_id, ac.webauthn_pubkey, ac.webauthn_counter, ac.webauthn_transports,
+                  u.username, u.display_name AS "displayName"
+             FROM auth_credentials ac
+             JOIN users u ON u.id = ac.user_id
+            WHERE ac.credential_type = 'webauthn' AND ac.webauthn_cred_id = $1`,
+          [credentialId],
+        );
+        return rows[0] || null;
+      },
+
+      async updateWebauthnCounter({ credentialRowId, newCounter }) {
+        await pool.query(
+          `UPDATE auth_credentials SET webauthn_counter = $1, last_used_at = now() WHERE id = $2`,
+          [newCounter, credentialRowId],
+        );
+      },
+
+      async findOwnedAuthenticationCredential({ userId, credentialId }) {
+        const { rows } = await pool.query(
+          `SELECT id, user_id, webauthn_pubkey, webauthn_counter, webauthn_transports
+             FROM auth_credentials
+            WHERE credential_type = 'webauthn'
+              AND user_id = $1
+              AND webauthn_cred_id = $2`,
+          [userId, credentialId],
+        );
+        return rows[0] || null;
+      },
+    },
+
     remote: {
       async findRemoteIdByUserId(userId) {
         const { rows } = await pool.query(`SELECT remote_id FROM users WHERE id = $1`, [userId]);

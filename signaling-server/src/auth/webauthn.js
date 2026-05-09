@@ -5,7 +5,7 @@ import {
   verifyAuthenticationResponse,
   verifyRegistrationResponse,
 } from '@simplewebauthn/server';
-import { pool } from '../db.js';
+import { createStorage } from '../storage/index.js';
 
 export const WEBAUTHN_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS auth_credentials (
@@ -50,39 +50,23 @@ function toB64u(value) {
   return Buffer.from(value).toString('base64url');
 }
 
-async function saveChallenge(userId, challenge, purpose) {
-  await pool.query(
-    `INSERT INTO webauthn_challenges (user_id, challenge, purpose) VALUES ($1, $2, $3)`,
-    [userId, b64uToBuf(challenge), purpose],
-  );
+async function saveChallenge(storage, userId, challenge, purpose) {
+  await storage.auth.saveChallenge({
+    userId,
+    challenge: b64uToBuf(challenge),
+    purpose,
+  });
 }
 
-async function consumeChallenge(userId, purpose) {
-  const { rows } = await pool.query(
-    `DELETE FROM webauthn_challenges
-      WHERE id = (
-        SELECT id
-          FROM webauthn_challenges
-         WHERE (($1::text IS NULL AND user_id IS NULL) OR user_id = $1)
-           AND purpose = $2
-           AND expires_at > now()
-         ORDER BY created_at DESC
-         LIMIT 1
-      )
-      RETURNING challenge`,
-    [userId, purpose],
-  );
-  return rows[0] ? toB64u(rows[0].challenge) : null;
+async function consumeChallenge(storage, userId, purpose) {
+  const challenge = await storage.auth.consumeChallenge({ userId, purpose });
+  return challenge ? toB64u(challenge) : null;
 }
 
-async function issueSessionToken(userId, ttlSeconds = 60 * 60 * 24 * 30) {
+async function issueSessionToken(storage, userId, ttlSeconds = 60 * 60 * 24 * 30) {
   const raw = crypto.randomBytes(32);
   const token = toB64u(raw);
-  await pool.query(
-    `INSERT INTO auth_credentials (user_id, credential_type, token_hash, expires_at)
-     VALUES ($1, 'session', $2, now() + make_interval(secs => $3))`,
-    [userId, sha256(raw), ttlSeconds],
-  );
+  await storage.auth.issueSessionToken({ userId, tokenHash: sha256(raw), ttlSeconds });
   return token;
 }
 
@@ -95,29 +79,16 @@ function issueStepupToken(userId, action) {
   return `${body}.${sig}`;
 }
 
-async function findUserByUsername(username) {
-  const { rows } = await pool.query(
-    `SELECT id, username, display_name AS "displayName" FROM users WHERE lower(username) = lower($1)`,
-    [username],
-  );
-  return rows[0] || null;
+async function findUserByUsername(storage, username) {
+  return storage.auth.findUserByUsername(username);
 }
 
-export function mountWebAuthn(app, { rpID, rpName, origin }) {
+export function mountWebAuthn(app, { rpID, rpName, origin }, storage = createStorage()) {
   app.post('/api/auth/webauthn/register/options', async (req, res) => {
     const userId = req.user?.id;
     if (!userId) return res.status(401).json({ error: 'unauthenticated' });
 
-    const [userRes, credsRes] = await Promise.all([
-      pool.query(`SELECT username, display_name FROM users WHERE id = $1`, [userId]),
-      pool.query(
-        `SELECT webauthn_cred_id, webauthn_transports
-           FROM auth_credentials
-          WHERE user_id = $1 AND credential_type = 'webauthn'`,
-        [userId],
-      ),
-    ]);
-    const user = userRes.rows[0];
+    const { user, credentials } = await storage.auth.getRegistrationOptionsContext(userId);
     if (!user) return res.status(404).json({ error: 'no_such_user' });
 
     const options = await generateRegistrationOptions({
@@ -125,9 +96,9 @@ export function mountWebAuthn(app, { rpID, rpName, origin }) {
       rpName,
       userID: userId,
       userName: user.username,
-      userDisplayName: user.display_name,
+      userDisplayName: user.displayName,
       attestationType: 'none',
-      excludeCredentials: credsRes.rows.map((row) => ({
+      excludeCredentials: credentials.map((row) => ({
         id: toB64u(row.webauthn_cred_id),
         transports: row.webauthn_transports ?? undefined,
       })),
@@ -137,7 +108,7 @@ export function mountWebAuthn(app, { rpID, rpName, origin }) {
       },
     });
 
-    await saveChallenge(userId, options.challenge, 'register');
+    await saveChallenge(storage, userId, options.challenge, 'register');
     res.json(options);
   });
 
@@ -145,7 +116,7 @@ export function mountWebAuthn(app, { rpID, rpName, origin }) {
     const userId = req.user?.id;
     if (!userId) return res.status(401).json({ error: 'unauthenticated' });
 
-    const expectedChallenge = await consumeChallenge(userId, 'register');
+    const expectedChallenge = await consumeChallenge(storage, userId, 'register');
     if (!expectedChallenge) return res.status(400).json({ error: 'no_challenge' });
 
     let verification;
@@ -166,27 +137,14 @@ export function mountWebAuthn(app, { rpID, rpName, origin }) {
     }
 
     const credential = verification.registrationInfo.credential;
-    await pool.query(
-      `INSERT INTO auth_credentials (
-         user_id, credential_type, webauthn_cred_id, webauthn_pubkey,
-         webauthn_counter, webauthn_transports, device_label, last_used_at
-       ) VALUES ($1, 'webauthn', $2, $3, $4, $5, $6, now())
-       ON CONFLICT (webauthn_cred_id)
-       DO UPDATE SET
-         webauthn_pubkey = EXCLUDED.webauthn_pubkey,
-         webauthn_counter = EXCLUDED.webauthn_counter,
-         webauthn_transports = EXCLUDED.webauthn_transports,
-         device_label = COALESCE(EXCLUDED.device_label, auth_credentials.device_label),
-         last_used_at = now()`,
-      [
-        userId,
-        b64uToBuf(credential.id),
-        Buffer.from(credential.publicKey),
-        Number(credential.counter || 0),
-        req.body?.attResp?.response?.transports ?? null,
-        req.body?.deviceLabel ?? null,
-      ],
-    );
+    await storage.auth.upsertWebauthnCredential({
+      userId,
+      credentialId: b64uToBuf(credential.id),
+      publicKey: Buffer.from(credential.publicKey),
+      counter: Number(credential.counter || 0),
+      transports: req.body?.attResp?.response?.transports ?? null,
+      deviceLabel: req.body?.deviceLabel ?? null,
+    });
 
     res.json({ verified: true, credentialId: credential.id });
   });
@@ -197,16 +155,11 @@ export function mountWebAuthn(app, { rpID, rpName, origin }) {
     let allowCredentials;
 
     if (username) {
-      const user = await findUserByUsername(username);
+      const user = await findUserByUsername(storage, username);
       if (!user) return res.status(404).json({ error: 'no_such_user' });
       userId = user.id;
-      const { rows } = await pool.query(
-        `SELECT webauthn_cred_id, webauthn_transports
-           FROM auth_credentials
-          WHERE user_id = $1 AND credential_type = 'webauthn'`,
-        [userId],
-      );
-      allowCredentials = rows.map((row) => ({
+      const credentials = await storage.auth.listUserWebauthnCredentials(userId);
+      allowCredentials = credentials.map((row) => ({
         id: toB64u(row.webauthn_cred_id),
         transports: row.webauthn_transports ?? undefined,
       }));
@@ -217,7 +170,7 @@ export function mountWebAuthn(app, { rpID, rpName, origin }) {
       userVerification: 'required',
       allowCredentials,
     });
-    await saveChallenge(userId, options.challenge, 'authenticate');
+    await saveChallenge(storage, userId, options.challenge, 'authenticate');
     res.json(options);
   });
 
@@ -226,20 +179,12 @@ export function mountWebAuthn(app, { rpID, rpName, origin }) {
     if (!assertion?.id) return res.status(400).json({ error: 'no_assertion' });
 
     const credentialId = b64uToBuf(assertion.id);
-    const { rows } = await pool.query(
-      `SELECT ac.id, ac.user_id, ac.webauthn_pubkey, ac.webauthn_counter, ac.webauthn_transports,
-              u.username, u.display_name AS "displayName"
-         FROM auth_credentials ac
-         JOIN users u ON u.id = ac.user_id
-        WHERE ac.credential_type = 'webauthn' AND ac.webauthn_cred_id = $1`,
-      [credentialId],
-    );
-    const credential = rows[0];
+    const credential = await storage.auth.findAuthenticationCredential(credentialId);
     if (!credential) return res.status(404).json({ error: 'unknown_credential' });
 
     const expectedChallenge =
-      await consumeChallenge(credential.user_id, 'authenticate') ||
-      await consumeChallenge(null, 'authenticate');
+      await consumeChallenge(storage, credential.user_id, 'authenticate') ||
+      await consumeChallenge(storage, null, 'authenticate');
     if (!expectedChallenge) return res.status(400).json({ error: 'no_challenge' });
 
     let verification;
@@ -263,12 +208,12 @@ export function mountWebAuthn(app, { rpID, rpName, origin }) {
 
     if (!verification.verified) return res.status(401).json({ error: 'not_verified' });
 
-    await pool.query(
-      `UPDATE auth_credentials SET webauthn_counter = $1, last_used_at = now() WHERE id = $2`,
-      [verification.authenticationInfo.newCounter, credential.id],
-    );
+    await storage.auth.updateWebauthnCounter({
+      credentialRowId: credential.id,
+      newCounter: verification.authenticationInfo.newCounter,
+    });
 
-    const token = await issueSessionToken(credential.user_id);
+    const token = await issueSessionToken(storage, credential.user_id);
     res.json({
       verified: true,
       userId: credential.user_id,
@@ -285,21 +230,16 @@ export function mountWebAuthn(app, { rpID, rpName, origin }) {
     const userId = req.user?.id;
     if (!userId) return res.status(401).json({ error: 'unauthenticated' });
 
-    const { rows } = await pool.query(
-      `SELECT webauthn_cred_id, webauthn_transports
-         FROM auth_credentials
-        WHERE user_id = $1 AND credential_type = 'webauthn'`,
-      [userId],
-    );
+    const credentials = await storage.auth.listUserWebauthnCredentials(userId);
     const options = await generateAuthenticationOptions({
       rpID,
       userVerification: 'required',
-      allowCredentials: rows.map((row) => ({
+      allowCredentials: credentials.map((row) => ({
         id: toB64u(row.webauthn_cred_id),
         transports: row.webauthn_transports ?? undefined,
       })),
     });
-    await saveChallenge(userId, options.challenge, 'stepup');
+    await saveChallenge(storage, userId, options.challenge, 'stepup');
     res.json(options);
   });
 
@@ -311,18 +251,10 @@ export function mountWebAuthn(app, { rpID, rpName, origin }) {
     if (!assertion?.id) return res.status(400).json({ error: 'no_assertion' });
 
     const credentialId = b64uToBuf(assertion.id);
-    const { rows } = await pool.query(
-      `SELECT id, user_id, webauthn_pubkey, webauthn_counter, webauthn_transports
-         FROM auth_credentials
-        WHERE credential_type = 'webauthn'
-          AND user_id = $1
-          AND webauthn_cred_id = $2`,
-      [userId, credentialId],
-    );
-    const credential = rows[0];
+    const credential = await storage.auth.findOwnedAuthenticationCredential({ userId, credentialId });
     if (!credential) return res.status(404).json({ error: 'unknown_credential' });
 
-    const expectedChallenge = await consumeChallenge(userId, 'stepup');
+    const expectedChallenge = await consumeChallenge(storage, userId, 'stepup');
     if (!expectedChallenge) return res.status(400).json({ error: 'no_challenge' });
 
     let verification;
@@ -346,10 +278,10 @@ export function mountWebAuthn(app, { rpID, rpName, origin }) {
 
     if (!verification.verified) return res.status(401).json({ error: 'not_verified' });
 
-    await pool.query(
-      `UPDATE auth_credentials SET webauthn_counter = $1, last_used_at = now() WHERE id = $2`,
-      [verification.authenticationInfo.newCounter, credential.id],
-    );
+    await storage.auth.updateWebauthnCounter({
+      credentialRowId: credential.id,
+      newCounter: verification.authenticationInfo.newCounter,
+    });
 
     res.json({ verified: true, stepupToken: issueStepupToken(userId, req.body?.action || 'unknown') });
   });
