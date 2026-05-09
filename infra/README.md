@@ -64,6 +64,29 @@ chmod +x deploy-ubuntu.sh verify-vps.sh
 ./verify-vps.sh https://signal.mjjsmanzini.com turn.mjjsmanzini.com
 ```
 
+## GitHub Actions setup
+
+To provision the `production` GitHub environment and the deploy secrets/vars
+used by [.github/workflows/deploy.yml](../.github/workflows/deploy.yml), run:
+
+```powershell
+pwsh ./scripts/setup-github-deploy.ps1 \
+   -DeployHost "your-vps-host" \
+   -DeployUser "ubuntu" \
+   -DeployPath "/home/ubuntu/web-access" \
+   -DeployKeyPath "$HOME/.ssh/id_ed25519" \
+   -WebUrl "https://example.com" \
+   -SignalUrl "https://signal.example.com"
+```
+
+Prerequisites:
+- GitHub CLI (`gh`) installed and authenticated with access to the repo
+- PowerShell 7+ (`pwsh`)
+- Optional: `ssh-keyscan` available to pre-populate `DEPLOY_KNOWN_HOSTS`
+
+If you omit optional values, the script prompts for what it needs and leaves the
+smoke-test variables unset.
+
 ## Cloudflare DNS
 
 Use these DNS records for the VPS deployment:
