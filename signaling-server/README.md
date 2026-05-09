@@ -26,6 +26,23 @@ npm run dev
 
 Server defaults to `http://localhost:4000`.
 
+## Storage Backends
+
+The signaling server still defaults to Postgres-backed storage:
+
+```powershell
+$env:STORAGE_BACKEND='postgres'
+```
+
+A Firebase adapter scaffold now exists at `src/storage/firebase.js`, but it is
+not implemented yet. You can select it to verify backend wiring only:
+
+```powershell
+$env:STORAGE_BACKEND='firebase'
+```
+
+When selected today, storage calls fail with explicit `not implemented` errors.
+
 ## HTTP API
 
 | Method | Path                   | Purpose                                         |
