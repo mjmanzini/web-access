@@ -6,7 +6,8 @@
  * for a single signaling node; move to Redis when you scale horizontally.
  */
 import crypto from 'node:crypto';
-import { pool, logEvent } from './db.js';
+import { logEvent } from './db.js';
+import { createStorage } from './storage/index.js';
 
 function randomId(bytes = 6) { return crypto.randomBytes(bytes).toString('hex'); }
 function randomToken() { return crypto.randomBytes(32).toString('base64url'); }
@@ -16,7 +17,8 @@ function normalizeUsername(u) {
 }
 
 export class UserRegistry {
-  constructor() {
+  constructor(storage = createStorage()) {
+    this.storage = storage;
     /** @type {Map<string, Set<string>>} userId -> Set<socketId> */
     this.presence = new Map();
   }
@@ -28,10 +30,12 @@ export class UserRegistry {
     const id = randomId();
     const token = randomToken();
     try {
-      await pool.query(
-        `INSERT INTO users (id, username, display_name, token) VALUES ($1, $2, $3, $4)`,
-        [id, uname, display, token],
-      );
+      await this.storage.users.createUser({
+        id,
+        username: uname,
+        displayName: display,
+        token,
+      });
     } catch (e) {
       if (String(e.code) === '23505') throw new Error('username_taken');
       throw e;
@@ -42,11 +46,8 @@ export class UserRegistry {
 
   async loginByToken(token) {
     if (!token) return null;
-    const direct = await pool.query(
-      `SELECT id, username, display_name AS "displayName" FROM users WHERE token = $1`,
-      [token],
-    );
-    if (direct.rows[0]) return direct.rows[0];
+    const direct = await this.storage.users.findUserByLegacyToken(token);
+    if (direct) return direct;
 
     let raw;
     try {
@@ -55,40 +56,23 @@ export class UserRegistry {
       return null;
     }
 
-    const { rows } = await pool.query(
-      `SELECT u.id, u.username, u.display_name AS "displayName"
-         FROM auth_credentials ac
-         JOIN users u ON u.id = ac.user_id
-        WHERE ac.credential_type = 'session'
-          AND ac.token_hash = $1
-          AND (ac.expires_at IS NULL OR ac.expires_at > now())
-        ORDER BY ac.created_at DESC
-        LIMIT 1`,
-      [sha256(raw)],
-    );
-    if (rows[0]) {
-      await pool.query(
-        `UPDATE auth_credentials SET last_used_at = now() WHERE credential_type = 'session' AND token_hash = $1`,
-        [sha256(raw)],
-      ).catch(() => {});
+    const tokenHash = sha256(raw);
+
+    const user = await this.storage.users.findUserBySessionTokenHash(tokenHash);
+    if (user) {
+      await this.storage.users.touchSessionToken(tokenHash).catch(() => {});
     }
-    return rows[0] || null;
+    return user;
   }
 
   async getById(id) {
     if (!id) return null;
-    const { rows } = await pool.query(
-      `SELECT id, username, display_name AS "displayName" FROM users WHERE id = $1`,
-      [id],
-    );
-    return rows[0] || null;
+    return this.storage.users.findUserById(id);
   }
 
   async publicList() {
-    const { rows } = await pool.query(
-      `SELECT id, username, display_name AS "displayName" FROM users ORDER BY display_name ASC`,
-    );
-    return rows.map((u) => ({
+    const users = await this.storage.users.listUsers();
+    return users.map((u) => ({
       ...u,
       online: (this.presence.get(u.id)?.size || 0) > 0,
     }));
