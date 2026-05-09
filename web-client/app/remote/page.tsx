@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { Suspense, useEffect, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { TopBar } from '../../components/theme/TopBar';
 import { api, loadStoredUser, type StoredUser } from '../../lib/user-session';
+import { RemoteSessionView } from '../../components/remote/RemoteSessionView';
 
 interface AnnounceResponse {
   remoteId: string;
@@ -23,8 +24,10 @@ function fmtExpiry(iso: string) {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
-export default function RemoteDashPage() {
+function RemotePageInner() {
   const router = useRouter();
+  const params = useSearchParams();
+  const sessionId = params.get('sessionId')?.trim() || '';
   const [me, setMe] = useState<StoredUser | null>(null);
   const [ann, setAnn] = useState<AnnounceResponse | null>(null);
   const [busyAnn, setBusyAnn] = useState(false);
@@ -39,6 +42,10 @@ export default function RemoteDashPage() {
     if (!u) { router.replace('/onboarding'); return; }
     setMe(u);
   }, [router]);
+
+  if (sessionId) {
+    return <RemoteSessionView sessionId={sessionId} />;
+  }
 
   // Tick for the expiry countdown
   useEffect(() => {
@@ -76,7 +83,7 @@ export default function RemoteDashPage() {
         '/api/remote/connect',
         { method: 'POST', body: JSON.stringify({ partnerId: id, pin: pinInput }) },
       );
-      router.push(`/remote/${r.sessionId}`);
+      router.push(`/remote?sessionId=${encodeURIComponent(r.sessionId)}`);
     } catch (e) {
       setErr((e as Error).message);
     } finally { setBusyConn(false); }
@@ -172,5 +179,13 @@ export default function RemoteDashPage() {
         </div>
       </div>
     </>
+  );
+}
+
+export default function RemoteDashPage() {
+  return (
+    <Suspense fallback={<div className="remote-dash"><div className="container"><section className="tv-card"><div className="muted">Loading…</div></section></div></div>}>
+      <RemotePageInner />
+    </Suspense>
   );
 }

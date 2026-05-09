@@ -24,6 +24,28 @@ NEXT_PUBLIC_SIGNALING_URL=https://signal.mjjsmanzini.com
 
 That value is already provided in `.env.production`.
 
+## Cloudflare Pages
+
+This app is configured for static export so it can be deployed from
+`web-client/` to Cloudflare Pages.
+
+Suggested Pages settings:
+
+```text
+Root directory: web-client
+Build command: npm install ; npm run build:pages
+Build output directory: out
+```
+
+Required environment variable:
+
+```env
+NEXT_PUBLIC_SIGNALING_URL=https://signal.example.com
+```
+
+The remote desktop session route uses `/remote?sessionId=...` so the app stays
+compatible with static hosting.
+
 ## What's here (Phase 1)
 
 - `app/page.tsx` — pairing form + WebRTC viewer (`RTCPeerConnection` + video `<video>`)

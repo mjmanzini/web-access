@@ -1,22 +1,11 @@
 'use client';
 
-/**
- * Remote-desktop viewer for an established session.
- *
- * Reached via the dashboard's "Connect" flow:
- *   POST /api/remote/connect -> { sessionId } -> router.push(`/remote/<sessionId>`)
- *
- * Joins the existing signaling room as role='client' (same protocol as the
- * legacy pairing viewer), waits for the host's WebRTC offer, displays the
- * remote stream, and forwards pointer/keyboard input through the `control`
- * DataChannel.
- */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import { io, type Socket } from 'socket.io-client';
-import { sendEncoded, useVideoInput } from '../../../lib/use-video-input';
-import type { ControlMessage, InputMode } from '../../../lib/control-protocol';
-import { signalingUrl } from '../../../lib/user-session';
+import { sendEncoded, useVideoInput } from '../../lib/use-video-input';
+import type { ControlMessage, InputMode } from '../../lib/control-protocol';
+import { signalingUrl } from '../../lib/user-session';
 
 type Phase = 'connecting' | 'waiting-host' | 'connected' | 'error' | 'ended';
 
@@ -28,14 +17,13 @@ async function fetchIceServers(base: string): Promise<RTCIceServer[]> {
     if (!res.ok) return FALLBACK_ICE;
     const data = (await res.json()) as { iceServers?: RTCIceServer[] };
     return data.iceServers?.length ? data.iceServers : FALLBACK_ICE;
-  } catch { return FALLBACK_ICE; }
+  } catch {
+    return FALLBACK_ICE;
+  }
 }
 
-export default function RemoteSessionPage() {
+export function RemoteSessionView({ sessionId }: { sessionId: string }) {
   const router = useRouter();
-  const params = useParams<{ sessionId: string }>();
-  const sessionId = params?.sessionId;
-
   const [phase, setPhase] = useState<Phase>('connecting');
   const [status, setStatus] = useState('Joining session…');
   const [mode, setMode] = useState<InputMode>('trackpad');
@@ -83,7 +71,8 @@ export default function RemoteSessionPage() {
       };
       pc.onconnectionstatechange = () => {
         if (pc.connectionState === 'failed') {
-          setPhase('error'); setStatus('Connection failed');
+          setPhase('error');
+          setStatus('Connection failed');
         } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'closed') {
           setPhase((p) => (p === 'connected' ? 'ended' : p));
         }
@@ -105,7 +94,8 @@ export default function RemoteSessionPage() {
         setStatus('Negotiating connection…');
       });
       socket.on('peer-left', () => {
-        setPhase('ended'); setStatus('The host disconnected.');
+        setPhase('ended');
+        setStatus('The host disconnected.');
       });
 
       socket.on('signal', async (msg: { sdp?: RTCSessionDescriptionInit; candidate?: RTCIceCandidateInit }) => {
@@ -121,7 +111,8 @@ export default function RemoteSessionPage() {
             await pc.addIceCandidate(msg.candidate).catch(() => {});
           }
         } catch (e) {
-          setPhase('error'); setStatus(`Signal error: ${(e as Error).message}`);
+          setPhase('error');
+          setStatus(`Signal error: ${(e as Error).message}`);
         }
       });
     })();
@@ -134,13 +125,14 @@ export default function RemoteSessionPage() {
     };
   }, [sessionId]);
 
-  // Attach pending stream to <video> once mounted.
   useEffect(() => {
     if (!streamReady) return;
-    const v = videoRef.current; const s = pendingStreamRef.current;
-    if (!v || !s) return;
-    v.srcObject = s; v.muted = true;
-    v.play().catch(() => {});
+    const video = videoRef.current;
+    const stream = pendingStreamRef.current;
+    if (!video || !stream) return;
+    video.srcObject = stream;
+    video.muted = true;
+    video.play().catch(() => {});
   }, [streamReady]);
 
   const endSession = () => {
@@ -160,7 +152,7 @@ export default function RemoteSessionPage() {
         <div>
           <div style={{ fontSize: 18, fontWeight: 500, marginBottom: 8 }}>{status}</div>
           <div style={{ color: 'var(--wa-muted)', fontSize: 13 }}>
-            Session <code>{sessionId?.slice(0, 8)}…</code>
+            Session <code>{sessionId.slice(0, 8)}…</code>
           </div>
           {(phase === 'error' || phase === 'ended') && (
             <button className="btn-primary" style={{ marginTop: 18, maxWidth: 240 }} onClick={endSession}>
@@ -170,7 +162,7 @@ export default function RemoteSessionPage() {
         </div>
       </div>
     );
-  }, [phase, status, sessionId]);
+  }, [phase, sessionId, status]);
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: '#000', overflow: 'hidden' }}>
@@ -184,7 +176,6 @@ export default function RemoteSessionPage() {
           touchAction: 'none', userSelect: 'none',
         }}
       />
-      {/* Floating top toolbar */}
       <div style={{
         position: 'absolute', top: 12, left: 12, right: 12,
         display: 'flex', gap: 8, alignItems: 'center',
@@ -203,7 +194,7 @@ export default function RemoteSessionPage() {
           {phase === 'connected' ? '● Live' : status}
         </div>
         <button
-          onClick={() => setMode((m) => (m === 'trackpad' ? 'touch' : 'trackpad'))}
+          onClick={() => setMode((current) => (current === 'trackpad' ? 'touch' : 'trackpad'))}
           style={{
             background: 'rgba(0,0,0,.55)', color: '#fff',
             padding: '8px 14px', borderRadius: 8, fontSize: 13,
@@ -211,7 +202,7 @@ export default function RemoteSessionPage() {
           }}
           title="Toggle input mode"
         >
-          {mode === 'trackpad' ? '🖱 Trackpad' : '👆 Touch'}
+          {mode === 'trackpad' ? 'Trackpad' : 'Touch'}
         </button>
       </div>
       {overlay}

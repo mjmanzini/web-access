@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev -p 3000",
     "build": "next build",
+    "build:pages": "node -e \"require('fs').rmSync('.next',{recursive:true,force:true})\" && next build",
     "start": "next start -H 0.0.0.0 -p 3000",
     "start:https": "node server.mjs",
     "lint": "next lint"
