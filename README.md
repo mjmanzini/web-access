@@ -34,3 +34,8 @@ desktop stream appears.
 - **Phase 2** (done) — Mobile viewport: trackpad/touch input, pinch-zoom, virtual modifier keys.
 - **Phase 3** (done) — NAT traversal: [`infra/`](infra/README.md) with Coturn + signaling Docker image; clients fetch `/ice` for time-limited TURN credentials.
 - **Phase 4** (done) — Host-side input execution via `@nut-tree-fork/nut-js` (optional native dep, graceful no-op fallback); client quality cycle (low / medium / high) adjusts `RTCRtpSender.setParameters` on the host; auto-downgrade to low on `saveData` / 2g–3g `connection.effectiveType`.
+
+## Deployment Notes
+
+- Cheapest practical frontend hosting: [docs/DEPLOY-CLOUDFLARE.md](c:/Users/Jastice/Documents/web-access/docs/DEPLOY-CLOUDFLARE.md)
+- Free-hosting tradeoffs and recommended split: [docs/FREE-HOSTING.md](c:/Users/Jastice/Documents/web-access/docs/FREE-HOSTING.md)
