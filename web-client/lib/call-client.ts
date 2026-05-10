@@ -159,6 +159,7 @@ export class CallClient {
       const state = this.ensureConnection(peerId);
       if (!state.pc.getSenders().some((sender) => sender.track === track)) {
         state.pc.addTrack(track, new MediaStream([track]));
+        await this.sendOffer(peerId, state);
       }
     }
   }
@@ -185,13 +186,9 @@ export class CallClient {
     };
     pc.onnegotiationneeded = async () => {
       try {
-        state.makingOffer = true;
-        await pc.setLocalDescription();
-        if (pc.localDescription) this.sendSignal(peerId, { description: pc.localDescription.toJSON() });
+        await this.sendOffer(peerId, state);
       } catch (err) {
         this.emit('error', err as Error);
-      } finally {
-        state.makingOffer = false;
       }
     };
     pc.ontrack = ({ track }) => {
@@ -210,6 +207,17 @@ export class CallClient {
     };
 
     return state;
+  }
+
+  private async sendOffer(peerId: string, state: PeerConnectionState) {
+    if (state.makingOffer || state.pc.signalingState !== 'stable') return;
+    try {
+      state.makingOffer = true;
+      await state.pc.setLocalDescription();
+      if (state.pc.localDescription) this.sendSignal(peerId, { description: state.pc.localDescription.toJSON() });
+    } finally {
+      state.makingOffer = false;
+    }
   }
 
   private trackSourceFor(peerId: string, kind: string): RemoteTrack['source'] {

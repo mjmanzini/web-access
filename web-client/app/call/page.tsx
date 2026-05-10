@@ -4,7 +4,7 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import { useSearchParams } from 'next/navigation';
 import { io, type Socket } from 'socket.io-client';
 import { CallClient, type RemoteTrack } from '../../lib/call-client';
-import type { CallMediaConfig, ChatMessage, PeerInfo } from '../../lib/call-protocol';
+import type { ChatMessage, PeerInfo } from '../../lib/call-protocol';
 
 function defaultSignalingUrl(): string {
   if (typeof window !== 'undefined') {
@@ -32,7 +32,6 @@ function CallInner() {
   });
   const [phase, setPhase] = useState<'idle' | 'joining' | 'in-call' | 'error'>('idle');
   const [status, setStatus] = useState('');
-  const [warning, setWarning] = useState('');
   const [peers, setPeers] = useState<PeerInfo[]>([]);
   const [tracks, setTracks] = useState<TrackEntry[]>([]);
   const [chat, setChat] = useState<ChatMessage[]>([]);
@@ -76,7 +75,6 @@ function CallInner() {
     setLocalStream(null);
     setPeers([]); setTracks([]); setChat([]);
     setScreen(false);
-    setWarning('');
     setPhase('idle');
   }, []);
 
@@ -84,7 +82,6 @@ function CallInner() {
     if (!roomId) { setStatus('Enter a session code'); return; }
     setPhase('joining');
     setStatus('Connecting…');
-    setWarning('');
     const displayName = name.trim() || 'Guest';
     localStorage.setItem('wa:name', displayName);
     try {
@@ -119,7 +116,6 @@ function CallInner() {
       selfIdRef.current = joined.self.id;
       setPeers(joined.peers);
       setChat(joined.chat);
-  setWarning(buildMediaWarning(joined.mediaConfig));
 
       // Acquire mic+cam and start producing.
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -300,11 +296,6 @@ function CallInner() {
       </header>
 
       <main className="call-main">
-        {warning && (
-          <div className="call-warning" role="status">
-            {warning}
-          </div>
-        )}
         <section className="tile-grid" data-count={tiles.length}>
           {tiles.map((t) => (
             <Tile
@@ -490,25 +481,6 @@ function mergeStreams(...streams: (MediaStream | null)[]) {
 }
 function initials(name: string) {
   return name.split(/\s+/).map((x) => x[0] || '').join('').slice(0, 2).toUpperCase() || '·';
-}
-
-function buildMediaWarning(mediaConfig: CallMediaConfig | undefined) {
-  if (!mediaConfig?.requiresDirectMediaPorts || !mediaConfig.announcedIp) return '';
-  if (typeof window === 'undefined') return '';
-  if (!isPrivateIpv4(mediaConfig.announcedIp)) return '';
-
-  const hostname = window.location.hostname;
-  if (hostname === 'localhost' || hostname === '127.0.0.1' || isPrivateIpv4(hostname)) return '';
-
-  return `Call media is advertising private IP ${mediaConfig.announcedIp}. Camera, audio, and screen share usually fail from public URLs or Cloudflare Tunnel until the signaling server is deployed with a public MEDIASOUP_ANNOUNCED_IP and reachable media ports.`;
-}
-
-function isPrivateIpv4(host: string) {
-  return /^10\./.test(host)
-    || /^127\./.test(host)
-    || /^192\.168\./.test(host)
-    || /^169\.254\./.test(host)
-    || /^172\.(1[6-9]|2\d|3[0-1])\./.test(host);
 }
 
 interface TileProps {

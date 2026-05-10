@@ -63,6 +63,6 @@ jobs:
             curl -fsS -I --max-time 15 "$WEB_URL"
           fi
           if [ -n "${SIGNAL_URL:-}" ]; then
-            echo "[verify] $SIGNAL_URL/healthz"
-            curl -fsS --max-time 15 "$SIGNAL_URL/healthz"
+            echo "[verify] $SIGNAL_URL/readyz"
+            curl -fsS --max-time 15 "$SIGNAL_URL/readyz"
           fi
