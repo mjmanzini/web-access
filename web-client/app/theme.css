@@ -309,6 +309,8 @@
 .wa-modal {
   position: relative;
   width: min(460px, 100%);
+  max-height: calc(100dvh - 44px);
+  overflow: auto;
   padding: 26px;
   border-radius: 8px;
   border: 1px solid rgba(255, 255, 255, .12);
