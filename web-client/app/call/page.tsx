@@ -3,6 +3,7 @@
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { io, type Socket } from 'socket.io-client';
+import { AppShell } from '../../components/app/AppShell';
 import { CallClient, type RemoteTrack } from '../../lib/call-client';
 import type { ChatMessage, PeerInfo } from '../../lib/call-protocol';
 
@@ -15,6 +16,26 @@ function defaultSignalingUrl(): string {
   return 'http://localhost:4000';
 }
 const SIGNALING_URL = process.env.NEXT_PUBLIC_SIGNALING_URL || defaultSignalingUrl();
+const IDENTITY_KEY = 'wa:identity';
+
+function loadIdentity() {
+  if (typeof window === 'undefined') return { fullName: '', email: '' };
+  try {
+    const parsed = JSON.parse(localStorage.getItem(IDENTITY_KEY) || '{}') as { fullName?: string; email?: string };
+    return { fullName: parsed.fullName || localStorage.getItem('wa:name') || '', email: parsed.email || '' };
+  } catch {
+    return { fullName: localStorage.getItem('wa:name') || '', email: '' };
+  }
+}
+
+function saveIdentity(fullName: string, email: string) {
+  localStorage.setItem(IDENTITY_KEY, JSON.stringify({ fullName, email }));
+  localStorage.setItem('wa:name', fullName);
+}
+
+function generateRoomId() {
+  return Array.from({ length: 5 }, () => String.fromCharCode(65 + Math.floor(Math.random() * 26))).join('');
+}
 
 interface TrackEntry {
   peerId: string;
@@ -30,6 +51,12 @@ function CallInner() {
     if (typeof window !== 'undefined') return localStorage.getItem('wa:name') || '';
     return '';
   });
+  const [email, setEmail] = useState('');
+  const [modal, setModal] = useState<'create' | 'join' | null>(null);
+  const [waitingRoomId, setWaitingRoomId] = useState('');
+  const [copied, setCopied] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteSent, setInviteSent] = useState(false);
   const [phase, setPhase] = useState<'idle' | 'joining' | 'in-call' | 'error'>('idle');
   const [status, setStatus] = useState('');
   const [peers, setPeers] = useState<PeerInfo[]>([]);
@@ -50,6 +77,12 @@ function CallInner() {
   const chatInputRef = useRef<HTMLInputElement | null>(null);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [chatDraft, setChatDraft] = useState('');
+
+  useEffect(() => {
+    const saved = loadIdentity();
+    if (saved.fullName) setName(saved.fullName);
+    if (saved.email) setEmail(saved.email);
+  }, []);
 
   const upsertTrack = useCallback((entry: TrackEntry) => {
     setTracks((prev) => {
@@ -78,8 +111,16 @@ function CallInner() {
     setPhase('idle');
   }, []);
 
-  async function join() {
-    if (!roomId) { setStatus('Enter a session code'); return; }
+  function ensureIdentity() {
+    const fullName = name.trim();
+    const address = email.trim().toLowerCase();
+    if (fullName.length < 2) throw new Error('Enter your full name.');
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address)) throw new Error('Enter a valid email address.');
+    saveIdentity(fullName, address);
+  }
+
+  async function join(nextRoomId = roomId) {
+    if (!nextRoomId) { setStatus('Enter a session code'); return; }
     setPhase('joining');
     setStatus('Connecting…');
     const displayName = name.trim() || 'Guest';
@@ -112,7 +153,7 @@ function CallInner() {
         if (p.fromPeer && p.fromPeer !== selfIdRef.current) setIncoming({ roomId: p.roomId, fromPeer: p.fromPeer });
       });
 
-      const joined = await client.join(roomId, displayName);
+      const joined = await client.join(nextRoomId, displayName);
       selfIdRef.current = joined.self.id;
       setPeers(joined.peers);
       setChat(joined.chat);
@@ -196,72 +237,149 @@ function CallInner() {
 
   useEffect(() => () => { void teardown(); }, [teardown]);
 
+  const identityKnown = name.trim().length > 1 && /@/.test(email);
+  const inviteLink = waitingRoomId && typeof window !== 'undefined'
+    ? `${window.location.origin}/call?room=${encodeURIComponent(waitingRoomId)}`
+    : '';
+
+  async function connectFromModal() {
+    setStatus('');
+    try {
+      ensureIdentity();
+      const targetRoom = roomId.trim().toUpperCase();
+      if (!targetRoom) throw new Error('Enter a session code.');
+      setRoomId(targetRoom);
+      setModal(null);
+      await join(targetRoom);
+    } catch (e) {
+      setStatus((e as Error).message);
+    }
+  }
+
+  function createWaitingRoom() {
+    setStatus('');
+    try {
+      ensureIdentity();
+      const generated = generateRoomId();
+      setRoomId(generated);
+      setWaitingRoomId(generated);
+      setModal(null);
+    } catch (e) {
+      setStatus((e as Error).message);
+    }
+  }
+
+  const copyInvite = async () => {
+    if (!inviteLink) return;
+    await navigator.clipboard?.writeText(inviteLink).catch(() => {});
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1600);
+  };
+
+  const sendInvite = () => {
+    if (!inviteEmail.trim() || !inviteLink) return;
+    const subject = encodeURIComponent('Join my Web-Access call');
+    const body = encodeURIComponent(`Join my secure call: ${inviteLink}`);
+    window.location.href = `mailto:${inviteEmail.trim()}?subject=${subject}&body=${body}`;
+    setInviteSent(true);
+  };
+
   /* ---------------- render ---------------- */
 
   if (phase !== 'in-call') {
     return (
-      <div className="login login-call">
-        <div className="login-card call-card">
-          <div className="brand">
-            <div className="brand-mark">W</div>
-            <div className="brand-name">Web-Access <span className="dim">· Call</span></div>
-          </div>
-          <div className="mode-pill mode-pill-call">Calling</div>
-          <h1>Join a call</h1>
-          <div className="login-sub">Enter the session code and your name to start an audio-video conversation.</div>
-
-          <div className="flow-summary">
-            <div className="flow-summary-title">This space is for conversation</div>
-            <div className="flow-summary-copy">Best when you need voice, camera, or screen sharing with other people in the session.</div>
-          </div>
-
-          <label className="field-label">Session code</label>
-          <input
-            className="pair-input"
-            value={roomId}
-            onChange={(e) => setRoomId(e.target.value.toUpperCase().trim())}
-            placeholder="ROOMID"
-            maxLength={60}
-            autoCapitalize="characters"
-            autoCorrect="off"
-            spellCheck={false}
-          />
-
-          <label className="field-label" style={{ marginTop: 12 }}>Your name</label>
-          <input
-            className="text-input"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="e.g. Alex"
-            maxLength={40}
-          />
-
-          <div className="row-gap">
-            <button className="btn-primary btn-block" onClick={() => void join()} disabled={phase === 'joining' || !roomId}>
-              {phase === 'joining' ? 'Joining…' : 'Join call'}
+      <AppShell
+        title="Calls"
+        subtitle="Audio, video, screen share"
+        list={(
+          <div className="wa-session-list">
+            <button className="wa-session-row active">
+              <span className="wa-session-dot" />
+              <span><strong>Calls</strong><em>{waitingRoomId ? `Waiting in ${waitingRoomId}` : 'Create or join a room'}</em></span>
             </button>
           </div>
-
-          <div className="flow-switch">
-            <div className="flow-switch-head">Need device control instead?</div>
-            <a
-              className="flow-option"
-              href={roomId ? `/?code=${encodeURIComponent(roomId)}` : '/'}
-            >
-              <span className="flow-option-badge remote">Remote</span>
-              <span className="flow-option-copy">
-                <strong>Remote desktop control</strong>
-                <span>Use the same session code to open the desktop stream and send input to the PC.</span>
-              </span>
-            </a>
+        )}
+      >
+        <div className="wa-hub">
+          <div className="wa-hub-head">
+            <span className="wa-kicker">Calls</span>
+            <h2>{waitingRoomId ? 'Call waiting room' : 'Start with what you need'}</h2>
+            <p>{waitingRoomId ? 'Share the invite link, then start the call when ready.' : 'Create a room and invite people, or join with a session code.'}</p>
           </div>
 
-          <div className="status-line">
-            <span className={`status-dot ${phase === 'joining' ? 'connecting' : phase === 'error' ? 'err' : 'ok'}`} />
-            <span>{status || 'Ready'}</span>
-          </div>
+          {!waitingRoomId && (
+            <div className="wa-choice-grid">
+              <button className="wa-action-card" onClick={() => { setStatus(''); setModal('create'); }}>
+                <span className="wa-action-icon create" aria-hidden="true">+</span>
+                <span><strong>Create New Session</strong><em>Start a secure call and invite others.</em></span>
+              </button>
+              <button className="wa-action-card" onClick={() => { setStatus(''); setModal('join'); }}>
+                <span className="wa-action-icon join" aria-hidden="true">→</span>
+                <span><strong>Join Existing Session</strong><em>Enter a Session ID to connect.</em></span>
+              </button>
+            </div>
+          )}
+
+          {waitingRoomId && (
+            <section className="wa-waiting-room">
+              <div className="wa-session-code">{waitingRoomId}</div>
+              <button className="wa-copy-btn" onClick={copyInvite}><span aria-hidden="true">□</span>{copied ? 'Copied' : 'Copy Invite Link'}</button>
+              <div className="wa-invite-line">
+                <label className="wa-floating-field">
+                  <input value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} placeholder=" " type="email" />
+                  <span>Email Address</span>
+                </label>
+                <button className="wa-primary-btn" onClick={sendInvite} disabled={!inviteEmail.trim()}>{inviteSent ? 'Invite Ready' : 'Send Invite'}</button>
+              </div>
+              <p className="wa-helper">This secure link will expire automatically when all users leave the session.</p>
+              <button className="wa-start-btn" onClick={() => void join(waitingRoomId)} disabled={phase === 'joining'}>
+                {phase === 'joining' ? 'Starting…' : 'Start Session'}
+              </button>
+            </section>
+          )}
+
+          {status && <div className="wa-form-error">{status}</div>}
         </div>
-      </div>
+
+        {modal && (
+          <div className="wa-modal-backdrop" role="presentation" onMouseDown={(e) => { if (e.target === e.currentTarget) setModal(null); }}>
+            <section className="wa-modal" role="dialog" aria-modal="true" aria-labelledby="call-modal-title">
+              <button className="wa-modal-close" onClick={() => setModal(null)} aria-label="Close">×</button>
+              <span className="wa-kicker">{modal === 'join' ? 'Join call' : 'Create call'}</span>
+              <h2 id="call-modal-title">{modal === 'join' ? 'Connect to a call' : 'Generate a call room'}</h2>
+
+              {modal === 'join' && (
+                <label className="wa-floating-field">
+                  <input value={roomId} onChange={(e) => setRoomId(e.target.value.toUpperCase().trim())} placeholder=" " autoCapitalize="characters" />
+                  <span>Session ID</span>
+                </label>
+              )}
+
+              {!identityKnown && (
+                <>
+                  <label className="wa-floating-field">
+                    <input value={name} onChange={(e) => setName(e.target.value)} placeholder=" " autoComplete="name" />
+                    <span>Your Full Name</span>
+                  </label>
+                  <label className="wa-floating-field">
+                    <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder=" " type="email" autoComplete="email" />
+                    <span>Email Address</span>
+                  </label>
+                </>
+              )}
+
+              {identityKnown && (
+                <div className="wa-known-user"><strong>{name}</strong><span>{email}</span></div>
+              )}
+
+              {status && <div className="wa-form-error">{status}</div>}
+              <button className="wa-primary-btn" onClick={() => { void (modal === 'join' ? connectFromModal() : createWaitingRoom()); }}>
+                {modal === 'join' ? 'Connect' : 'Generate Session'}
+              </button>
+            </section>
+          </div>
+        )}
+      </AppShell>
     );
   }
 

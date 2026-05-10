@@ -1,9 +1,9 @@
 'use client';
 
-import { Suspense, useEffect, useState } from 'react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { TopBar } from '../../components/theme/TopBar';
-import { api, loadStoredUser, type StoredUser } from '../../lib/user-session';
+import { AppShell } from '../../components/app/AppShell';
+import { api, loadStoredUser, registerUser, type StoredUser } from '../../lib/user-session';
 import { RemoteSessionView } from '../../components/remote/RemoteSessionView';
 
 interface AnnounceResponse {
@@ -13,178 +13,303 @@ interface AnnounceResponse {
   expiresAt: string;
 }
 
-function maskRemoteId(id: string) {
-  return id.replace(/(\d{3})(\d{3})(\d{3})/, '$1 $2 $3');
+type ModalMode = 'create' | 'join' | null;
+
+interface VisitorIdentity {
+  fullName: string;
+  email: string;
 }
-function fmtExpiry(iso: string) {
-  const ms = new Date(iso).getTime() - Date.now();
-  if (ms <= 0) return 'expired';
-  const m = Math.floor(ms / 60000);
-  const s = Math.floor((ms % 60000) / 1000);
-  return `${m}:${String(s).padStart(2, '0')}`;
+
+const IDENTITY_KEY = 'wa:identity';
+
+function loadIdentity(): VisitorIdentity {
+  if (typeof window === 'undefined') return { fullName: '', email: '' };
+  try {
+    const raw = localStorage.getItem(IDENTITY_KEY);
+    if (!raw) return { fullName: localStorage.getItem('wa:name') || '', email: '' };
+    const parsed = JSON.parse(raw) as Partial<VisitorIdentity>;
+    return { fullName: parsed.fullName || '', email: parsed.email || '' };
+  } catch {
+    return { fullName: '', email: '' };
+  }
+}
+
+function saveIdentity(identity: VisitorIdentity) {
+  localStorage.setItem(IDENTITY_KEY, JSON.stringify(identity));
+  localStorage.setItem('wa:name', identity.fullName);
+}
+
+function createUsername(email: string) {
+  const normalized = email.trim().toLowerCase().replace(/[^a-z0-9_.-]/g, '.').replace(/\.+/g, '.');
+  return normalized.replace(/^\.+|\.+$/g, '') || `guest.${Date.now().toString(36)}`;
+}
+
+function formatSessionId(value: string) {
+  const clean = value.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+  if (clean.length === 9) return clean.replace(/(.{3})(.{3})(.{3})/, '$1-$2-$3');
+  if (clean.length > 9) return clean.slice(0, 12).replace(/(.{3})/g, '$1-').replace(/-$/, '');
+  return clean;
+}
+
+function generateFallbackSessionId() {
+  const digits = Array.from({ length: 9 }, () => Math.floor(Math.random() * 10)).join('');
+  return digits.replace(/(.{3})(.{3})(.{3})/, '$1-$2-$3');
 }
 
 function RemotePageInner() {
   const router = useRouter();
   const params = useSearchParams();
   const sessionId = params.get('sessionId')?.trim() || '';
+  const codeParam = params.get('code')?.trim() || '';
   const [me, setMe] = useState<StoredUser | null>(null);
-  const [ann, setAnn] = useState<AnnounceResponse | null>(null);
-  const [busyAnn, setBusyAnn] = useState(false);
-  const [partner, setPartner] = useState('');
-  const [pinInput, setPinInput] = useState('');
-  const [busyConn, setBusyConn] = useState(false);
+  const [modal, setModal] = useState<ModalMode>(null);
+  const [identity, setIdentity] = useState<VisitorIdentity>({ fullName: '', email: '' });
+  const [joinCode, setJoinCode] = useState(codeParam.toUpperCase());
+  const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [now, setNow] = useState(Date.now());
+  const [waiting, setWaiting] = useState<AnnounceResponse | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteSent, setInviteSent] = useState(false);
 
   useEffect(() => {
-    const u = loadStoredUser();
-    if (!u) { router.replace('/onboarding'); return; }
-    setMe(u);
-  }, [router]);
+    setMe(loadStoredUser());
+    setIdentity(loadIdentity());
+  }, []);
+
+  useEffect(() => {
+    if (codeParam) {
+      setJoinCode(codeParam.toUpperCase());
+      setModal('join');
+    }
+  }, [codeParam]);
+
+  const identityKnown = identity.fullName.trim().length > 1 && /@/.test(identity.email);
+  const displaySessionId = waiting ? formatSessionId(waiting.sessionId) : '';
+  const inviteLink = waiting && typeof window !== 'undefined'
+    ? `${window.location.origin}/remote?sessionId=${encodeURIComponent(waiting.sessionId)}`
+    : '';
+
+  async function ensureUser() {
+    const existing = loadStoredUser();
+    if (existing) {
+      setMe(existing);
+      return existing;
+    }
+    const fullName = identity.fullName.trim();
+    const email = identity.email.trim().toLowerCase();
+    if (fullName.length < 2) throw new Error('Enter your full name.');
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Enter a valid email address.');
+    saveIdentity({ fullName, email });
+    const user = await registerUser(`${createUsername(email)}.${Date.now().toString(36)}`, fullName);
+    setMe(user);
+    return user;
+  }
+
+  async function createSession() {
+    setErr(null);
+    setBusy(true);
+    try {
+      await ensureUser();
+      const announcement = await api<AnnounceResponse>('/api/remote/announce', { method: 'POST', body: '{}' });
+      setWaiting(announcement);
+      setModal(null);
+    } catch (e) {
+      setErr((e as Error).message || 'Could not create the session.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function joinSession() {
+    setErr(null);
+    setBusy(true);
+    try {
+      await ensureUser();
+      const cleaned = joinCode.replace(/[^a-zA-Z0-9_-]/g, '').trim();
+      if (cleaned.length < 4) throw new Error('Enter a valid Session ID.');
+      router.push(`/remote?sessionId=${encodeURIComponent(cleaned)}`);
+    } catch (e) {
+      setErr((e as Error).message || 'Could not join the session.');
+      setBusy(false);
+    }
+  }
+
+  const copyInvite = async () => {
+    if (!inviteLink) return;
+    await navigator.clipboard?.writeText(inviteLink).catch(() => {});
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1600);
+  };
+
+  const sendInvite = () => {
+    if (!inviteEmail.trim() || !inviteLink) return;
+    const subject = encodeURIComponent('Join my Web-Access remote session');
+    const body = encodeURIComponent(`Join my secure remote session: ${inviteLink}`);
+    window.location.href = `mailto:${inviteEmail.trim()}?subject=${subject}&body=${body}`;
+    setInviteSent(true);
+  };
+
+  const recentList = useMemo(() => (
+    <div className="wa-session-list">
+      <button className="wa-session-row active" onClick={() => setWaiting(null)}>
+        <span className="wa-session-dot" />
+        <span>
+          <strong>Remote Desktop</strong>
+          <em>{me ? `Signed in as ${me.displayName}` : 'Create or join a secure session'}</em>
+        </span>
+      </button>
+      {waiting && (
+        <button className="wa-session-row" onClick={() => setWaiting(waiting)}>
+          <span className="wa-session-dot live" />
+          <span>
+            <strong>{displaySessionId}</strong>
+            <em>Waiting room active</em>
+          </span>
+        </button>
+      )}
+    </div>
+  ), [displaySessionId, me, waiting]);
+
+  const hub = (
+    <div className="wa-hub">
+      <div className="wa-hub-head">
+        <span className="wa-kicker">Remote Desktop</span>
+        <h2>{waiting ? 'Session waiting room' : 'Start with what you need'}</h2>
+        <p>
+          {waiting
+            ? 'Share the invite link, then start when everyone is ready.'
+            : 'Create a secure session for others to join, or connect to an existing session.'}
+        </p>
+      </div>
+
+      {!waiting && (
+        <div className="wa-choice-grid">
+          <button className="wa-action-card" onClick={() => { setErr(null); setModal('create'); }}>
+            <span className="wa-action-icon create" aria-hidden="true">+</span>
+            <span>
+              <strong>Create New Session</strong>
+              <em>Start a secure session and invite others.</em>
+            </span>
+          </button>
+          <button className="wa-action-card" onClick={() => { setErr(null); setModal('join'); }}>
+            <span className="wa-action-icon join" aria-hidden="true">→</span>
+            <span>
+              <strong>Join Existing Session</strong>
+              <em>Enter a Session ID to connect.</em>
+            </span>
+          </button>
+        </div>
+      )}
+
+      {waiting && (
+        <section className="wa-waiting-room">
+          <div className="wa-session-code">{displaySessionId}</div>
+          <button className="wa-copy-btn" onClick={copyInvite}>
+            <span aria-hidden="true">□</span>
+            {copied ? 'Copied' : 'Copy Invite Link'}
+          </button>
+          <div className="wa-invite-line">
+            <label className="wa-floating-field">
+              <input
+                value={inviteEmail}
+                onChange={(e) => setInviteEmail(e.target.value)}
+                placeholder=" "
+                type="email"
+              />
+              <span>Email Address</span>
+            </label>
+            <button className="wa-primary-btn" onClick={sendInvite} disabled={!inviteEmail.trim()}>
+              {inviteSent ? 'Invite Ready' : 'Send Invite'}
+            </button>
+          </div>
+          <p className="wa-helper">This secure link will expire automatically when all users leave the session.</p>
+          <button className="wa-start-btn" onClick={() => router.push(`/remote?sessionId=${encodeURIComponent(waiting.sessionId)}`)}>
+            Start Session
+          </button>
+        </section>
+      )}
+    </div>
+  );
 
   if (sessionId) {
     return <RemoteSessionView sessionId={sessionId} />;
   }
 
-  // Tick for the expiry countdown
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(t);
-  }, []);
-
-  // Auto-clear announcement when it expires
-  useEffect(() => {
-    if (!ann) return;
-    if (new Date(ann.expiresAt).getTime() <= now) setAnn(null);
-  }, [ann, now]);
-
-  const announce = async () => {
-    setErr(null); setBusyAnn(true);
-    try {
-      const r = await api<AnnounceResponse>('/api/remote/announce', { method: 'POST', body: '{}' });
-      setAnn(r);
-    } catch (e) { setErr((e as Error).message); }
-    finally { setBusyAnn(false); }
-  };
-  const cancel = async () => {
-    try { await api('/api/remote/cancel', { method: 'POST', body: '{}' }); } catch {}
-    setAnn(null);
-  };
-
-  const connect = async () => {
-    setErr(null);
-    const id = partner.replace(/\s+/g, '');
-    if (!/^\d{6,12}$/.test(id)) { setErr('Enter a valid Partner ID (6–12 digits).'); return; }
-    if (!/^\d{6}$/.test(pinInput)) { setErr('PIN must be 6 digits.'); return; }
-    setBusyConn(true);
-    try {
-      const r = await api<{ sessionId: string; host: { displayName: string } }>(
-        '/api/remote/connect',
-        { method: 'POST', body: JSON.stringify({ partnerId: id, pin: pinInput }) },
-      );
-      router.push(`/remote?sessionId=${encodeURIComponent(r.sessionId)}`);
-    } catch (e) {
-      setErr((e as Error).message);
-    } finally { setBusyConn(false); }
-  };
-
-  const copy = (v: string) => navigator.clipboard?.writeText(v).catch(() => {});
-
   return (
-    <>
-      <TopBar user={me ?? undefined} />
-      <div className="remote-dash">
-        <div className="container">
-          {/* HOST CARD */}
-          <section className="tv-card">
-            <h3>Allow Remote Control</h3>
-            <p style={{ color: 'var(--wa-muted)', fontSize: 13, marginBottom: 18 }}>
-              Generate a one-time PIN and share it (with your ID) so a partner
-              can take control of this device. The PIN expires in 5 minutes
-              and works once.
-            </p>
+    <AppShell title="Remote Desktop" subtitle="Sessions, invites, and secure access" list={recentList}>
+      {hub}
+      {modal && (
+        <div className="wa-modal-backdrop" role="presentation" onMouseDown={(e) => { if (e.target === e.currentTarget) setModal(null); }}>
+          <section className="wa-modal" role="dialog" aria-modal="true" aria-labelledby="remote-modal-title">
+            <button className="wa-modal-close" onClick={() => setModal(null)} aria-label="Close">×</button>
+            <span className="wa-kicker">{modal === 'join' ? 'Join session' : 'Create session'}</span>
+            <h2 id="remote-modal-title">{modal === 'join' ? 'Connect to a remote desktop' : 'Generate a new session'}</h2>
 
-            {!ann && (
-              <button className="btn-primary" onClick={announce} disabled={busyAnn}>
-                {busyAnn ? 'Generating…' : '🔓 Generate PIN'}
-              </button>
+            {modal === 'join' && (
+              <label className="wa-floating-field">
+                <input
+                  value={joinCode}
+                  onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
+                  placeholder=" "
+                  autoCapitalize="characters"
+                  autoCorrect="off"
+                  spellCheck={false}
+                />
+                <span>Session ID</span>
+              </label>
             )}
 
-            {ann && (
+            {!identityKnown && (
               <>
-                <div className="label">Your ID</div>
-                <div className="tv-id">
-                  <span>{maskRemoteId(ann.remoteId)}</span>
-                  <button onClick={() => copy(ann.remoteId)}>Copy</button>
-                </div>
-
-                <div className="tv-divider" />
-
-                <div className="label">One-time password</div>
-                <div className="tv-id" style={{ fontSize: 24 }}>
-                  <span className="tv-pin">{ann.pin}</span>
-                  <button onClick={() => copy(ann.pin)}>Copy</button>
-                  <button onClick={announce} title="Regenerate">↻</button>
-                </div>
-
-                <div className="tv-divider" />
-                <div style={{ fontSize: 12, color: 'var(--wa-muted)' }}>
-                  Expires in <strong style={{ color: 'var(--wa-text)' }}>{fmtExpiry(ann.expiresAt)}</strong>
-                  {' · '}
-                  <button onClick={cancel} style={{ color: 'var(--wa-muted)', textDecoration: 'underline' }}>
-                    cancel
-                  </button>
-                </div>
+                <label className="wa-floating-field">
+                  <input
+                    value={identity.fullName}
+                    onChange={(e) => setIdentity((current) => ({ ...current, fullName: e.target.value }))}
+                    placeholder=" "
+                    autoComplete="name"
+                  />
+                  <span>Your Full Name</span>
+                </label>
+                <label className="wa-floating-field">
+                  <input
+                    value={identity.email}
+                    onChange={(e) => setIdentity((current) => ({ ...current, email: e.target.value }))}
+                    placeholder=" "
+                    type="email"
+                    autoComplete="email"
+                  />
+                  <span>Email Address</span>
+                </label>
               </>
             )}
-          </section>
 
-          {/* CONTROL CARD */}
-          <section className="tv-card">
-            <h3>Control Remote Computer</h3>
-            <p style={{ color: 'var(--wa-muted)', fontSize: 13, marginBottom: 18 }}>
-              Enter your partner&apos;s ID and the one-time password they gave
-              you to start the session.
-            </p>
+            {identityKnown && (
+              <div className="wa-known-user">
+                <strong>{identity.fullName}</strong>
+                <span>{identity.email}</span>
+              </div>
+            )}
 
-            <div className="label">Partner ID</div>
-            <input
-              className="tv-input"
-              inputMode="numeric"
-              autoComplete="off"
-              placeholder="123 456 789"
-              value={partner}
-              onChange={(e) => setPartner(e.target.value.replace(/[^\d ]/g, ''))}
-            />
+            {err && <div className="wa-form-error">{err}</div>}
 
-            <div className="label" style={{ marginTop: 14 }}>One-time password</div>
-            <input
-              className="tv-input"
-              inputMode="numeric"
-              autoComplete="off"
-              maxLength={6}
-              placeholder="••••••"
-              value={pinInput}
-              onChange={(e) => setPinInput(e.target.value.replace(/\D/g, '').slice(0, 6))}
-              onKeyDown={(e) => { if (e.key === 'Enter') connect(); }}
-            />
-
-            {err && <div style={{ color: '#ef4f6c', fontSize: 13, marginTop: 10 }}>{err}</div>}
-
-            <button className="btn-primary" onClick={connect} disabled={busyConn}>
-              {busyConn ? 'Connecting…' : '→ Connect'}
+            <button
+              className="wa-primary-btn"
+              onClick={() => { void (modal === 'join' ? joinSession() : createSession()); }}
+              disabled={busy}
+            >
+              {busy ? 'Working…' : modal === 'join' ? 'Connect' : 'Generate Session'}
             </button>
           </section>
         </div>
-      </div>
-    </>
+      )}
+    </AppShell>
   );
 }
 
 export default function RemoteDashPage() {
   return (
-    <Suspense fallback={<div className="remote-dash"><div className="container"><section className="tv-card"><div className="muted">Loading…</div></section></div></div>}>
+    <Suspense fallback={<div className="wa-hub"><div className="wa-list-empty">Loading…</div></div>}>
       <RemotePageInner />
     </Suspense>
   );
