@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { Suspense, useEffect, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { webauthn } from '../../lib/auth/webauthn-client';
 import { api, loginWithToken, saveStoredUser, signalingUrl, type StoredUser } from '../../lib/user-session';
 
@@ -11,8 +11,9 @@ import { api, loginWithToken, saveStoredUser, signalingUrl, type StoredUser } fr
  *   2. Email or phone (one of)
  *  +  Optional: register a passkey (Face ID / fingerprint) on supported devices.
  */
-export default function OnboardingPage() {
+function OnboardingPageInner() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [step, setStep] = useState<1 | 2>(1);
   const [name, setName] = useState('');
   const [contact, setContact] = useState(''); // email or phone
@@ -22,6 +23,14 @@ export default function OnboardingPage() {
   const [biomDone, setBiomDone] = useState(false);
   const [biomSupported, setBiomSupported] = useState<boolean | null>(null);
   const [providers, setProviders] = useState<{ id: string; label: string }[]>([]);
+
+  useEffect(() => {
+    const invitedName = (searchParams.get('name') || '').trim();
+    const invitedContact = (searchParams.get('contact') || '').trim();
+    if (invitedName) setName(invitedName);
+    if (invitedContact) setContact(invitedContact);
+    if (invitedName) setStep(2);
+  }, [searchParams]);
 
   useEffect(() => {
     Promise.all([webauthn.isSupported(), webauthn.hasPlatformAuthenticator()])
@@ -167,6 +176,11 @@ export default function OnboardingPage() {
           <>
             <h1>Almost done</h1>
             <p className="sub">We need one way to reach you for calls and invites.</p>
+            {searchParams.get('invitedBy') && (
+              <div className="biom" style={{ marginBottom: 14 }}>
+                Invited by <strong style={{ color: 'var(--wa-text)' }}>{searchParams.get('invitedBy')}</strong>
+              </div>
+            )}
             <label htmlFor="c">Email or phone</label>
             <input id="c" autoFocus value={contact} onChange={(e) => setContact(e.target.value)}
                    onKeyDown={(e) => { if (e.key === 'Enter') next(); }}
@@ -208,5 +222,13 @@ export default function OnboardingPage() {
         </button>
       </div>
     </div>
+  );
+}
+
+export default function OnboardingPage() {
+  return (
+    <Suspense fallback={<div className="onboard"><div className="card">Loading…</div></div>}>
+      <OnboardingPageInner />
+    </Suspense>
   );
 }

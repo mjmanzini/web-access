@@ -746,6 +746,37 @@
 }
 .call-banner.notice { color: var(--wa-muted); }
 
+.add-contact-modal {
+  width: min(520px, 100%);
+}
+.add-contact-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 18px;
+}
+.add-contact-secondary {
+  min-height: 46px;
+  padding: 0 18px;
+  border-radius: 8px;
+  border: 1px solid var(--wa-subtle-border);
+  background: transparent;
+  color: var(--wa-text);
+  font-weight: 700;
+}
+.add-contact-primary {
+  margin-top: 0;
+}
+
+@media (max-width: 560px) {
+  .add-contact-actions {
+    flex-direction: column-reverse;
+  }
+  .add-contact-secondary,
+  .add-contact-primary {
+    width: 100%;
+  }
+}
+
 /* ----- Messages ----- */
 .messages {
   flex: 1; overflow-y: auto;

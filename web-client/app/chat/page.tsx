@@ -12,6 +12,8 @@ import {
   api, clearStoredUser, listUsers, loadStoredUser, signalingUrl, verifyToken, type StoredUser, type PublicUser,
 } from '../../lib/user-session';
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 interface ConvSummary {
   id: string;
   is_group: boolean;
@@ -36,6 +38,13 @@ interface IncomingInvite {
   from: { id: string; username: string; displayName: string };
 }
 
+interface AddContactResult {
+  mode: 'existing' | 'email';
+  email?: string;
+  conversationId?: string;
+  contact?: { id: string; username?: string; displayName: string };
+}
+
 function contactKey(user: { id: string; username?: string; displayName: string }) {
   return user.id || user.username || user.displayName.toLowerCase();
 }
@@ -51,6 +60,10 @@ export default function ChatPage() {
   const [invite, setInvite] = useState<IncomingInvite | null>(null);
   const [ringing, setRinging] = useState<{ toUserId: string; roomId: string } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [showAddContact, setShowAddContact] = useState(false);
+  const [contactDraft, setContactDraft] = useState({ displayName: '', email: '' });
+  const [contactBusy, setContactBusy] = useState(false);
+  const [contactError, setContactError] = useState<string | null>(null);
   const clientRef = useRef<ChatClient | null>(null);
   const socketRef = useRef<Socket | null>(null);
   // Map peerUserId <-> conversationId for 1:1 chats so the contact list
@@ -273,6 +286,79 @@ export default function ChatPage() {
     setInvite(null);
   }, [invite]);
 
+  const closeAddContact = useCallback(() => {
+    if (contactBusy) return;
+    setShowAddContact(false);
+    setContactError(null);
+  }, [contactBusy]);
+
+  const submitAddContact = useCallback(async () => {
+    const displayName = contactDraft.displayName.trim();
+    const email = contactDraft.email.trim().toLowerCase();
+    if (displayName.length < 2) {
+      setContactError('Enter the contact\'s full name.');
+      return;
+    }
+    if (!EMAIL_RE.test(email)) {
+      setContactError('Enter a valid email address.');
+      return;
+    }
+
+    setContactBusy(true);
+    setContactError(null);
+    try {
+      const result = await api<AddContactResult>('/api/contacts/invite', {
+        method: 'POST',
+        body: JSON.stringify({ displayName, email }),
+      });
+
+      if (result.mode === 'existing' && result.contact?.id) {
+        const addedContact = result.contact;
+        if (result.conversationId) {
+          userToConv.current.set(addedContact.id, result.conversationId);
+          convToUser.current.set(result.conversationId, addedContact.id);
+        }
+        setContacts((prev) => {
+          const existingEntry = prev.find((entry) => entry.id === addedContact.id);
+          const rest = prev.filter((entry) => entry.id !== addedContact.id);
+          return [
+            {
+              id: addedContact.id,
+              displayName: addedContact.displayName,
+              online: existingEntry?.online,
+              lastMessage: existingEntry?.lastMessage ?? 'Tap to start chatting',
+              lastMessageAt: existingEntry?.lastMessageAt,
+              unread: existingEntry?.unread ?? 0,
+            },
+            ...rest,
+          ];
+        });
+        setShowAddContact(false);
+        setContactDraft({ displayName: '', email: '' });
+        setNotice(`${addedContact.displayName} is now in your contacts.`);
+        await openContact(addedContact.id);
+        return;
+      }
+
+      setShowAddContact(false);
+      setContactDraft({ displayName: '', email: '' });
+      setNotice(`Invite email sent to ${email}.`);
+    } catch (e) {
+      const message = (e as Error).message || 'Could not add contact.';
+      if (message.includes('smtp_not_configured')) {
+        setContactError('SMTP is not configured on the server yet. Add SMTP settings and redeploy to send invites.');
+      } else if (message.includes('cannot_add_self')) {
+        setContactError('Use a different email address.');
+      } else if (message.includes('invalid_email')) {
+        setContactError('Enter a valid email address.');
+      } else {
+        setContactError('Could not add contact right now.');
+      }
+    } finally {
+      setContactBusy(false);
+    }
+  }, [contactDraft, openContact]);
+
   const send = (text: string) => {
     if (!activeId || !me) return;
     const cid = userToConv.current.get(activeId);
@@ -306,7 +392,11 @@ export default function ChatPage() {
           <div className="side-head">
             <div className="me" aria-hidden>{me?.displayName?.[0]?.toUpperCase() ?? '?'}</div>
             <div className="grow" />
-            <button className="icon-btn" aria-label="New chat">＋</button>
+            <button className="icon-btn" aria-label="New chat" onClick={() => {
+              setContactDraft({ displayName: '', email: '' });
+              setContactError(null);
+              setShowAddContact(true);
+            }}>＋</button>
             <button className="icon-btn" aria-label="Menu">⋮</button>
           </div>
           <ContactList
@@ -375,6 +465,47 @@ export default function ChatPage() {
           )}
         </main>
       </div>
+      {showAddContact && (
+        <div className="wa-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="add-contact-title">
+          <div className="wa-modal add-contact-modal">
+            <button className="wa-modal-close" type="button" aria-label="Close" onClick={closeAddContact}>×</button>
+            <h2 id="add-contact-title">Add Contact</h2>
+            <p>Enter the person&apos;s full name and email. Existing users are added immediately; new users receive an invite email.</p>
+            <label className="wa-floating-field">
+              <input
+                value={contactDraft.displayName}
+                onChange={(e) => setContactDraft((current) => ({ ...current, displayName: e.target.value }))}
+                placeholder=" "
+                autoFocus
+              />
+              <span>Full Name</span>
+            </label>
+            <label className="wa-floating-field">
+              <input
+                value={contactDraft.email}
+                onChange={(e) => setContactDraft((current) => ({ ...current, email: e.target.value }))}
+                placeholder=" "
+                type="email"
+                autoComplete="email"
+                onKeyDown={(e) => { if (e.key === 'Enter') void submitAddContact(); }}
+              />
+              <span>Email Address</span>
+            </label>
+            {contactError && <div className="wa-form-error">{contactError}</div>}
+            <div className="add-contact-actions">
+              <button type="button" className="add-contact-secondary" onClick={closeAddContact} disabled={contactBusy}>Cancel</button>
+              <button
+                type="button"
+                className="wa-primary-btn add-contact-primary"
+                onClick={() => void submitAddContact()}
+                disabled={contactBusy || contactDraft.displayName.trim().length < 2 || !EMAIL_RE.test(contactDraft.email.trim())}
+              >
+                {contactBusy ? 'Sending…' : 'Add Contact'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }

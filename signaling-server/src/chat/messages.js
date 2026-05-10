@@ -24,7 +24,10 @@
 import crypto from 'node:crypto';
 import { logEvent } from '../db.js';
 import { socketAuth } from '../auth/sessions.js';
+import { sendContactInviteEmail } from '../email/mailer.js';
 import { createStorage } from '../storage/index.js';
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export const CHAT_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS conversations (
@@ -113,6 +116,23 @@ async function markRead(storage, messageId, userId) {
   await storage.chat.markRead({ messageId, userId });
 }
 
+function normalizeInviteEmail(email) {
+  return String(email || '').trim().toLowerCase();
+}
+
+function normalizeInviteName(name) {
+  return String(name || '').trim().replace(/\s+/g, ' ').slice(0, 80);
+}
+
+function buildInviteUrl({ displayName, email, inviterName }) {
+  const base = process.env.CLIENT_URL || process.env.WEBAUTHN_ORIGIN || 'http://localhost:3000';
+  const url = new URL('/onboarding', base);
+  url.searchParams.set('name', displayName);
+  url.searchParams.set('contact', email);
+  url.searchParams.set('invitedBy', inviterName);
+  return url.toString();
+}
+
 export function attachChatRoutes(app, requireAuth, storage = createStorage()) {
   app.get('/api/conversations', requireAuth, async (req, res) => {
     try {
@@ -152,6 +172,49 @@ export function attachChatRoutes(app, requireAuth, storage = createStorage()) {
       res.json({ contacts: [...byId.values()] });
     } catch (e) {
       res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/contacts/invite', requireAuth, async (req, res) => {
+    const displayName = normalizeInviteName(req.body?.displayName);
+    const email = normalizeInviteEmail(req.body?.email);
+    if (displayName.length < 2) return res.status(400).json({ error: 'invalid_display_name' });
+    if (!EMAIL_RE.test(email)) return res.status(400).json({ error: 'invalid_email' });
+
+    try {
+      const existing = await storage.auth.findUserByEmail(email).catch(() => null);
+      if (existing?.id === req.user.id) {
+        return res.status(400).json({ error: 'cannot_add_self' });
+      }
+      if (existing) {
+        await storage.users.markKnownContact?.({
+          userId: req.user.id,
+          contactUserId: existing.id,
+          reason: 'invite',
+        }).catch(() => {});
+        const conversationId = await findOrCreate1to1(storage, req.user.id, existing.id);
+        return res.json({
+          mode: 'existing',
+          contact: existing,
+          conversationId,
+        });
+      }
+
+      const inviteUrl = buildInviteUrl({
+        displayName,
+        email,
+        inviterName: req.user.displayName || req.user.username || 'A contact',
+      });
+      await sendContactInviteEmail({
+        to: email,
+        inviteeName: displayName,
+        inviterName: req.user.displayName || req.user.username || 'A contact',
+        inviteUrl,
+      });
+      res.json({ mode: 'email', email });
+    } catch (e) {
+      const code = e.message === 'smtp_not_configured' ? 503 : 500;
+      res.status(code).json({ error: e.message || 'invite_failed' });
     }
   });
 
