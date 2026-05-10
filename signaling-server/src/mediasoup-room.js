@@ -1,13 +1,11 @@
 /**
- * A call "room" on top of mediasoup. One router per room; peers produce and
- * consume through that router. We keep the state small: identity, transports,
- * producers, consumers.
+ * A call "room" for P2P signaling. We keep the state small: identity,
+ * presence, peer-advertised media state, and chat history.
  *
  * Each room also carries light-weight state for the Teams-style UX layer:
  * presence, chat history, and "who is ringing whom".
  */
 import { randomUUID } from 'node:crypto';
-import { getWorker, ROUTER_MEDIA_CODECS, WEBRTC_TRANSPORT_OPTIONS } from './mediasoup-worker.js';
 
 /** @typedef {{ id: string, name: string, userId: string|null, socketId: string, joinedAt: number,
  *             mic: boolean, cam: boolean, screen: boolean,
@@ -21,16 +19,11 @@ export class CallRoom {
     this.peers = new Map();
     /** @type {{ id: string, from: string, fromName: string, text: string, at: number }[]} */
     this.chat = [];
-    this._router = null;
     this._closed = false;
   }
 
   async router() {
-    if (!this._router) {
-      const worker = await getWorker();
-      this._router = await worker.createRouter({ mediaCodecs: ROUTER_MEDIA_CODECS });
-    }
-    return this._router;
+    throw new Error('server_mixed_media_disabled');
   }
 
   async addPeer({ socketId, name, userId = null }) {
@@ -92,17 +85,13 @@ export class CallRoom {
   }
 
   async createWebRtcTransport() {
-    const router = await this.router();
-    const transport = await router.createWebRtcTransport(WEBRTC_TRANSPORT_OPTIONS);
-    return transport;
+    throw new Error('server_mixed_media_disabled');
   }
 
   close() {
     if (this._closed) return;
     this._closed = true;
     for (const pid of Array.from(this.peers.keys())) this.removePeer(pid);
-    try { this._router?.close(); } catch { /* ignore */ }
-    this._router = null;
   }
 }
 

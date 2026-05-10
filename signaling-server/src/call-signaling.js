@@ -1,5 +1,5 @@
 /**
- * Call signaling over Socket.IO, layered on top of mediasoup.
+ * Call signaling over Socket.IO.
  *
  * Event summary (client -> server, all ack'd with { ok, ... }):
  *   call:join              { roomId, name }                     -> { self, rtpCapabilities, peers, existingProducers, chat }
@@ -28,7 +28,6 @@
  *   call:p2p-signal      { fromPeerId, description?, candidate? }
  */
 import { RoomRegistry } from './mediasoup-room.js';
-import { ANNOUNCED_IP } from './mediasoup-worker.js';
 import {
   upsertCallRoom,
   recordParticipantJoin,
@@ -95,7 +94,7 @@ export function attachCallSignaling(io, users = null, storage = createStorage())
         existingProducers: [],
         chat: room.chat.slice(-CHAT_HISTORY),
         mediaConfig: {
-          announcedIp: ANNOUNCED_IP,
+          announcedIp: null,
           requiresDirectMediaPorts: false,
           mode: 'p2p',
         },
