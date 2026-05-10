@@ -32,6 +32,9 @@ const copyPinBtn = document.getElementById('copyPin');
 const remoteIdEl = document.getElementById('remoteId');
 const pinEl = document.getElementById('pin');
 const remoteExpiryEl = document.getElementById('remoteExpiry');
+const remoteInviteUrlEl = document.getElementById('remoteInviteUrl');
+const copyRemoteLinkBtn = document.getElementById('copyRemoteLink');
+const viewerAlertEl = document.getElementById('viewerAlert');
 const codeEl = document.getElementById('code');
 const qrImg = document.getElementById('qr');
 const qrEmpty = document.getElementById('qrEmpty');
@@ -72,6 +75,7 @@ let currentSession = null;
 let videoSender = null;
 let sessionMode = 'remote';
 let expiryTimer = null;
+let remoteStatusTimer = null;
 
 const STORAGE_KEYS = {
   mode: 'web-access.host.mode',
@@ -145,6 +149,50 @@ function updateRemoteExpiry() {
   }
 }
 
+function startRemoteStatusPolling() {
+  if (remoteStatusTimer) clearInterval(remoteStatusTimer);
+  remoteStatusTimer = setInterval(() => {
+    void syncRemoteStatus();
+  }, 5000);
+}
+
+async function syncRemoteStatus() {
+  if (!config || sessionMode !== 'remote') return;
+  const token = hostTokenInput.value.trim() || savedToken();
+  if (!token) return;
+  const result = await window.hostBridge.remoteStatus(token).catch(() => null);
+  if (!result?.ok || !result.ready || !result.sessionId) return;
+  if (currentSession?.sessionId === result.sessionId && socket?.connected) return;
+  currentSession = {
+    mode: 'remote',
+    remoteId: currentSession?.remoteId || '',
+    pin: currentSession?.pin || '',
+    sessionId: result.sessionId,
+    expiresAt: result.pinExpiresAt,
+  };
+  setRemoteInviteLink();
+  updateRemoteExpiry();
+  setStatus(`web-created remote session detected. Listening on ${remoteInviteUrl()}`);
+  await connectSignaling(result.sessionId);
+  await startCapture().catch(() => {});
+}
+
+function remoteInviteUrl() {
+  return currentSession?.sessionId ? `${config.clientUrl}/remote?sessionId=${encodeURIComponent(currentSession.sessionId)}` : '';
+}
+
+function setRemoteInviteLink() {
+  if (!remoteInviteUrlEl) return;
+  remoteInviteUrlEl.textContent = remoteInviteUrl() || 'Generate a session first';
+}
+
+function showViewerAlert(message) {
+  if (!viewerAlertEl) return;
+  viewerAlertEl.textContent = message;
+  viewerAlertEl.classList.add('show');
+  setTimeout(() => viewerAlertEl.classList.remove('show'), 8000);
+}
+
 function setMode(mode) {
   sessionMode = mode;
   setSavedMode(mode);
@@ -196,6 +244,7 @@ window.hostBridge.onConfig(async (cfg) => {
   setTokenState(Boolean(token), token ? 'token saved locally' : 'token required');
   setMode(loadSavedMode());
   updateRemoteExpiry();
+  startRemoteStatusPolling();
   if (sessionMode === 'remote' && token) await requestRemoteSession();
   else if (sessionMode === 'legacy') await requestNewCode();
 });
@@ -231,12 +280,15 @@ saveTokenBtn.addEventListener('click', async () => {
     return;
   }
   setStatus('host token saved');
+  startRemoteStatusPolling();
+  await syncRemoteStatus();
 });
 
 generateRemoteBtn.addEventListener('click', () => requestRemoteSession());
 cancelRemoteBtn.addEventListener('click', () => cancelRemoteSession(true));
 copyRemoteIdBtn.addEventListener('click', () => copyText(currentSession?.remoteId, 'partner ID copied'));
 copyPinBtn.addEventListener('click', () => copyText(currentSession?.pin, 'one-time PIN copied'));
+copyRemoteLinkBtn.addEventListener('click', () => copyText(remoteInviteUrl(), 'remote invite link copied'));
 
 hostTokenInput.addEventListener('keydown', (event) => {
   if (event.key === 'Enter') {
@@ -287,6 +339,7 @@ async function requestNewCode() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const { code, sessionId } = await res.json();
     currentSession = { code, sessionId };
+    setRemoteInviteLink();
     codeEl.textContent = code;
     const joinUrl = `${config.clientUrl}/?code=${code}`;
     try {
@@ -331,6 +384,7 @@ async function requestRemoteSession() {
     sessionId: result.sessionId,
     expiresAt: result.expiresAt,
   };
+  setRemoteInviteLink();
   remoteIdEl.textContent = maskRemoteId(result.remoteId);
   pinEl.textContent = result.pin;
   setTokenState(true, 'token saved locally');
@@ -338,7 +392,9 @@ async function requestRemoteSession() {
   if (expiryTimer) clearInterval(expiryTimer);
   expiryTimer = setInterval(updateRemoteExpiry, 1000);
   setStatus(`remote PIN ready for partner ${maskRemoteId(result.remoteId)}`);
+  setStatus(`remote session started. Share ${remoteInviteUrl()}`);
   await connectSignaling(result.sessionId);
+  await startCapture().catch(() => {});
 }
 
 async function cancelRemoteSession(report = true) {
@@ -346,6 +402,7 @@ async function cancelRemoteSession(report = true) {
   const token = hostTokenInput.value.trim() || savedToken();
   if (token) await window.hostBridge.remoteCancel(token).catch(() => {});
   currentSession = null;
+  setRemoteInviteLink();
   remoteIdEl.textContent = maskRemoteId('');
   pinEl.textContent = '——————';
   updateRemoteExpiry();
@@ -366,6 +423,7 @@ async function connectSignaling(sessionId) {
   socket.on('connect_error', (err) => setStatus(`signaling error: ${err.message}`));
   socket.on('peer-joined', async ({ role }) => {
     if (role !== 'client') return;
+    showViewerAlert('Viewer opened the invite link. Starting secure desktop stream…');
     setStatus('client joined, starting capture…');
     await startCapture();
     await createOffer();

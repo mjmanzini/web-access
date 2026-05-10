@@ -82,6 +82,7 @@ function CallInner() {
   const [participantsOpen, setParticipantsOpen] = useState(false);
   const [mic, setMic] = useState(true);
   const [cam, setCam] = useState(true);
+  const [cameraFacing, setCameraFacing] = useState<'user' | 'environment'>('user');
   const [screen, setScreen] = useState(false);
   const [incoming, setIncoming] = useState<{ roomId: string; fromPeer: string | null } | null>(null);
 
@@ -185,7 +186,7 @@ function CallInner() {
       // Acquire mic+cam and start producing.
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-        video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
+        video: { facingMode: cameraFacing, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
       });
       localStreamRef.current = stream;
       setLocalStream(stream);
@@ -212,10 +213,45 @@ function CallInner() {
   }
   async function toggleCam() {
     const next = !cam;
-    setCam(next);
     const track = localStreamRef.current?.getVideoTracks()[0];
-    if (track) track.enabled = next;
+    if (next && (!track || track.readyState === 'ended')) {
+      await replaceCameraTrack(cameraFacing);
+    } else if (track) {
+      track.enabled = next;
+    }
+    setCam(next);
     await clientRef.current?.setState({ cam: next });
+  }
+
+  async function replaceCameraTrack(facingMode: 'user' | 'environment') {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
+      audio: false,
+    });
+    const [newTrack] = stream.getVideoTracks();
+    if (!newTrack) throw new Error('No camera track available');
+    const currentStream = localStreamRef.current ?? new MediaStream();
+    currentStream.getVideoTracks().forEach((oldTrack) => {
+      currentStream.removeTrack(oldTrack);
+      oldTrack.stop();
+    });
+    currentStream.addTrack(newTrack);
+    localStreamRef.current = currentStream;
+    setLocalStream(new MediaStream(currentStream.getTracks()));
+    await clientRef.current?.produceCam(newTrack);
+    newTrack.enabled = true;
+  }
+
+  async function switchCamera() {
+    const nextFacing = cameraFacing === 'user' ? 'environment' : 'user';
+    try {
+      await replaceCameraTrack(nextFacing);
+      setCameraFacing(nextFacing);
+      setCam(true);
+      await clientRef.current?.setState({ cam: true });
+    } catch (err) {
+      setStatus(`Camera switch failed: ${(err as Error).message}`);
+    }
   }
   async function toggleScreen() {
     const client = clientRef.current;
@@ -538,6 +574,10 @@ function CallInner() {
         <button className={`ctl ${!cam ? 'danger' : ''}`} onClick={() => void toggleCam()} title={cam ? 'Stop video' : 'Start video'}>
           <span className="ctl-icon">{cam ? '🎥' : '📷'}</span>
           <span className="ctl-label">{cam ? 'Video off' : 'Video on'}</span>
+        </button>
+        <button className="ctl" onClick={() => void switchCamera()} title="Switch camera">
+          <span className="ctl-icon">⇄</span>
+          <span className="ctl-label">Switch</span>
         </button>
         <button className={`ctl ${screen ? 'active' : ''}`} onClick={() => void toggleScreen()} title="Share screen">
           <span className="ctl-icon">🖥️</span>

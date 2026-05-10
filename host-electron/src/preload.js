@@ -12,4 +12,5 @@ contextBridge.exposeInMainWorld('hostBridge', {
   openCallWindow: (code) => ipcRenderer.invoke('open-call-window', { code }),
   remoteAnnounce: (token) => ipcRenderer.invoke('remote-announce', { token }),
   remoteCancel: (token) => ipcRenderer.invoke('remote-cancel', { token }),
+  remoteStatus: (token) => ipcRenderer.invoke('remote-status', { token }),
 });

@@ -154,10 +154,16 @@ export class CallClient {
   }
 
   private async addLocalTrack(key: ProducerKey, track: MediaStreamTrack) {
+    const previousTrack = this.localTracks.get(key);
     this.localTracks.set(key, track);
     for (const peerId of this.peers.keys()) {
       const state = this.ensureConnection(peerId);
-      if (!state.pc.getSenders().some((sender) => sender.track === track)) {
+      const previousSender = previousTrack
+        ? state.pc.getSenders().find((sender) => sender.track === previousTrack)
+        : null;
+      if (previousSender) {
+        await previousSender.replaceTrack(track);
+      } else if (!state.pc.getSenders().some((sender) => sender.track === track)) {
         state.pc.addTrack(track, new MediaStream([track]));
         await this.sendOffer(peerId, state);
       }

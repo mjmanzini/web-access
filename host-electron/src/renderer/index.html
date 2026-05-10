@@ -211,6 +211,31 @@
         word-break: break-all;
       }
       .url-row strong { color: var(--text); }
+      .url-row button {
+        flex: 0 0 auto;
+        height: 30px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: var(--surface-2);
+        color: var(--text);
+        cursor: pointer;
+        font: inherit;
+        font-size: 12px;
+        font-weight: 700;
+        padding: 0 10px;
+      }
+      .alert-banner {
+        display: none;
+        margin: 12px 0;
+        padding: 10px 12px;
+        border-radius: 10px;
+        border: 1px solid rgba(35, 200, 121, .35);
+        background: rgba(35, 200, 121, .12);
+        color: var(--text);
+        font-size: 13px;
+        font-weight: 700;
+      }
+      .alert-banner.show { display: block; }
 
       .btn-row {
         display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap;
@@ -306,6 +331,8 @@
             <div class="hint" style="margin-top: 12px; margin-bottom: 10px;">Partner ID</div>
             <div class="pair-big" id="pin" style="letter-spacing: 14px;">——————</div>
             <div class="hint" id="remoteExpiry">Generate a one-time PIN to start accepting remote connections.</div>
+            <div class="url-row">Invite link: <strong id="remoteInviteUrl">Generate a session first</strong><button id="copyRemoteLink">Copy</button></div>
+            <div class="alert-banner" id="viewerAlert">Viewer opened the link. Starting secure desktop stream…</div>
             <div class="btn-row">
               <button class="btn secondary" id="saveToken">Save token</button>
               <button class="btn secondary" id="copyRemoteId">Copy ID</button>

@@ -6,7 +6,7 @@ import { TopBar } from '../../components/theme/TopBar';
 import { ContactList, type Contact } from '../../components/chat/ContactList';
 import { MessageList } from '../../components/chat/MessageList';
 import { Composer } from '../../components/chat/Composer';
-import { ChatClient, type ChatMessage } from '../../lib/chat-client';
+import { ChatClient, decryptChatMessage, isEncryptedBody, type ChatMessage } from '../../lib/chat-client';
 import {
   api, listUsers, loadStoredUser, signalingUrl, type StoredUser, type PublicUser,
 } from '../../lib/user-session';
@@ -72,7 +72,9 @@ export default function ChatPage() {
             id: u.id,
             displayName: u.displayName,
             online: u.online,
-            lastMessage: meta?.last_body ?? undefined,
+            lastMessage: meta?.last_body
+              ? (isEncryptedBody(meta.last_body) ? 'Encrypted message' : meta.last_body)
+              : undefined,
             lastMessageAt: meta?.last_msg_at ?? undefined,
             unread: meta?.unread ?? 0,
           };
@@ -166,7 +168,8 @@ export default function ChatPage() {
       const r = await api<{ messages: ChatMessage[] }>(
         `/api/conversations/${cid}/messages`,
       ).catch(() => ({ messages: [] }));
-      setThreads((prev) => ({ ...prev, [cid!]: r.messages }));
+      const decryptedMessages = await Promise.all(r.messages.map(decryptChatMessage));
+      setThreads((prev) => ({ ...prev, [cid!]: decryptedMessages }));
       const last = r.messages[r.messages.length - 1];
       if (last && last.senderId !== me.id) clientRef.current?.markRead(cid, last.id);
     }

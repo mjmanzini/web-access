@@ -151,6 +151,21 @@ ipcMain.handle('remote-cancel', async (_e, { token }) => {
   }
 });
 
+ipcMain.handle('remote-status', async (_e, { token }) => {
+  if (!token) return { ok: false, error: 'missing token' };
+  try {
+    const res = await fetch(`${SIGNALING_URL}/api/remote/status`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const text = await res.text();
+    let data; try { data = JSON.parse(text); } catch { data = { raw: text }; }
+    if (!res.ok) return { ok: false, status: res.status, error: data.error || text };
+    return { ok: true, ...data };
+  } catch (err) {
+    return { ok: false, error: err && err.message ? err.message : String(err) };
+  }
+});
+
 // IPC: open the call UI in a second BrowserWindow pointed at the web-client
 // `/call?room=<code>` route. Reusing the web-client means the Electron host
 // inherits the full Teams-style UI (mic/cam/screen/chat) without duplicating it.
