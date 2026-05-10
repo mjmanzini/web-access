@@ -49,6 +49,72 @@
   --wa-subtle-border: rgba(17, 27, 33, .12);
   --wa-modal-bg: rgba(255, 255, 255, .96);
   --wa-input-bg: #ffffff;
+
+  /* Override the legacy dark-only tokens defined in globals.css so every
+     screen (login, /remote dashboard, /call hub, onboarding, settings,
+     etc.) follows the active theme instead of staying dark. */
+  --bg: #f5f6f8;
+  --bg-2: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #f0f2f5;
+  --border: #e3e6ea;
+  --border-hi: #cdd2d8;
+  --text: #111b21;
+  --muted: #54656f;
+  --muted-2: #7c8a93;
+  --primary: #008069;
+  --primary-hi: #06966f;
+  --primary-soft: rgba(0, 128, 105, 0.12);
+  --danger: #d33d4d;
+  --success: #16a34a;
+  --ring: 0 0 0 3px rgba(0, 128, 105, 0.25);
+  --shadow:
+    0 12px 36px -22px rgba(11, 20, 26, 0.25),
+    0 4px 14px -6px rgba(11, 20, 26, 0.12);
+}
+
+/* Light-mode body background override (globals.css uses dark radial
+   gradients on body that look muddy on a light theme). */
+:root[data-theme='light'] body {
+  background:
+    radial-gradient(1100px 600px at 90% -10%, rgba(0, 128, 105, 0.10), transparent 60%),
+    radial-gradient(900px 500px at -10% 110%, rgba(47, 128, 255, 0.08), transparent 60%),
+    var(--bg);
+}
+
+/* Adjust translucent overlays that assume a dark backdrop. */
+:root[data-theme='light'] .btn-ghost:hover {
+  background: rgba(17, 27, 33, 0.05);
+}
+:root[data-theme='light'] .flow-option {
+  background: var(--surface);
+}
+:root[data-theme='light'] .flow-option:hover {
+  background: var(--surface-2);
+}
+:root[data-theme='light'] .flow-switch {
+  border-top-color: rgba(17, 27, 33, 0.08);
+}
+:root[data-theme='light'] .mode-choice,
+:root[data-theme='light'] .hub-code-card {
+  background: var(--surface);
+  border-color: var(--border);
+}
+:root[data-theme='light'] .mode-choice-icon {
+  border-color: rgba(17, 27, 33, 0.08);
+}
+:root[data-theme='light'] .wa-session-row:hover,
+:root[data-theme='light'] .wa-session-row.active {
+  background: rgba(17, 27, 33, 0.04);
+  border-color: rgba(17, 27, 33, 0.08);
+}
+:root[data-theme='light'] .composer .icon-btn:hover,
+:root[data-theme='light'] .side-head .icon-btn:hover,
+:root[data-theme='light'] .chat-head .actions button:hover {
+  background: rgba(17, 27, 33, 0.06);
+}
+:root[data-theme='light'] .wa-modal-close:hover {
+  background: rgba(17, 27, 33, 0.06);
 }
 
 /* ===========================================================
