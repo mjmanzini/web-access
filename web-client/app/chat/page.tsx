@@ -8,6 +8,7 @@ import { ContactList, type Contact } from '../../components/chat/ContactList';
 import { MessageList } from '../../components/chat/MessageList';
 import { Composer } from '../../components/chat/Composer';
 import { ChatClient, decryptChatMessage, isEncryptedBody, type ChatMessage } from '../../lib/chat-client';
+import { previewBody } from '../../lib/attachments';
 import {
   api, clearStoredUser, listUsers, loadStoredUser, signalingUrl, verifyToken, type StoredUser, type PublicUser,
 } from '../../lib/user-session';
@@ -163,7 +164,7 @@ export default function ChatPage() {
       if (peerId) {
         setContacts((prev) => prev.map((c) => c.id === peerId ? {
           ...c,
-          lastMessage: m.body,
+          lastMessage: previewBody(m.body),
           lastMessageAt: m.createdAt,
           unread: m.senderId !== me.id && peerId !== activeIdRef.current
                   ? (c.unread ?? 0) + 1 : 0,
