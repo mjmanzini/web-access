@@ -283,6 +283,39 @@ export function createPostgresStorage() {
         );
       },
 
+      async setOAuthTokens({ provider, providerUserId, refreshToken, accessToken, expiresAt, scope }) {
+        await pool.query(
+          `UPDATE oauth_identities
+              SET refresh_token = COALESCE($3, refresh_token),
+                  access_token = $4,
+                  access_token_exp = $5,
+                  scope = COALESCE($6, scope)
+            WHERE provider = $1 AND provider_user_id = $2`,
+          [provider, providerUserId, refreshToken || null, accessToken || null,
+           expiresAt ? new Date(expiresAt) : null, scope || null],
+        );
+      },
+
+      async getOAuthTokensForUser({ userId, provider }) {
+        const { rows } = await pool.query(
+          `SELECT provider, provider_user_id AS "providerUserId",
+                  refresh_token AS "refreshToken",
+                  access_token AS "accessToken",
+                  access_token_exp AS "accessTokenExp",
+                  scope
+             FROM oauth_identities
+            WHERE user_id = $1 AND provider = $2
+            LIMIT 1`,
+          [userId, provider],
+        );
+        const r = rows[0];
+        if (!r) return null;
+        return {
+          ...r,
+          accessTokenExp: r.accessTokenExp ? new Date(r.accessTokenExp).getTime() : null,
+        };
+      },
+
       async updateUserEmail({ userId, email }) {
         await pool.query(`UPDATE users SET email = $2 WHERE id = $1`, [userId, email]);
       },

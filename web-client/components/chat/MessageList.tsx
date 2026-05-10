@@ -1,8 +1,10 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ChatMessage } from '../../lib/chat-client';
 import { decodeAttachment, isAttachmentBody, AttachmentPayload } from '../../lib/attachments';
+import { api } from '../../lib/user-session';
+import { pushToast } from '../../lib/notifications';
 
 function formatTime(iso: string) {
   return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -19,6 +21,63 @@ function fmtSize(b: number) {
   if (b < 1024) return `${b} B`;
   if (b < 1024 * 1024) return `${(b / 1024).toFixed(0)} KB`;
   return `${(b / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function defaultName(payload: AttachmentPayload): string {
+  if ('name' in payload && payload.name) return payload.name;
+  if (payload.kind === 'audio') return `voice-${Date.now()}.webm`;
+  if (payload.kind === 'video') return `video-${Date.now()}.webm`;
+  if (payload.kind === 'image') return `photo-${Date.now()}.jpg`;
+  return `attachment-${Date.now()}`;
+}
+
+function SaveToDrive({ payload }: { payload: AttachmentPayload }) {
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+  if (payload.kind !== 'audio' && payload.kind !== 'video'
+      && payload.kind !== 'image' && payload.kind !== 'document') return null;
+  const dataUrl = (payload as { data?: string }).data;
+  if (!dataUrl) return null;
+  const onClick = async (e: React.MouseEvent) => {
+    e.preventDefault(); e.stopPropagation();
+    if (busy || done) return;
+    setBusy(true);
+    try {
+      const filename = defaultName(payload);
+      const mime = (payload as { mime?: string }).mime || 'application/octet-stream';
+      await api('/api/drive/upload', {
+        method: 'POST',
+        body: JSON.stringify({ filename, mime, dataUrl }),
+      });
+      setDone(true);
+      pushToast({ kind: 'success', title: 'Saved to Drive', body: filename });
+    } catch (err) {
+      const msg = String((err as Error).message || '');
+      if (msg.includes('no_drive_consent') || msg.includes('412')) {
+        pushToast({
+          kind: 'info',
+          title: 'Connect Google Drive',
+          body: 'Sign in again with Google to enable Drive backup.',
+          href: '/onboarding',
+        });
+      } else if (msg.includes('413') || msg.includes('too_large')) {
+        pushToast({ kind: 'error', title: 'Too large for Drive backup' });
+      } else {
+        pushToast({ kind: 'error', title: 'Drive upload failed', body: msg.slice(0, 120) });
+      }
+    } finally { setBusy(false); }
+  };
+  return (
+    <button
+      type="button"
+      className={`att-drive-btn${done ? ' done' : ''}`}
+      onClick={onClick}
+      disabled={busy || done}
+      title={done ? 'Saved to Google Drive' : 'Save to Google Drive'}
+    >
+      {done ? '✓ Drive' : busy ? '…' : '☁ Drive'}
+    </button>
+  );
 }
 
 function AttachmentBubble({ payload }: { payload: AttachmentPayload }) {
@@ -121,7 +180,12 @@ export function MessageList({
     const attachment = isAttachmentBody(m.body) ? decodeAttachment(m.body) : null;
     items.push(
       <div key={m.id} className={`bubble ${mine ? 'out' : 'in'}${same ? ' same' : ''}${attachment ? ' has-attachment' : ''}`}>
-        {attachment ? <AttachmentBubble payload={attachment} /> : m.body}
+        {attachment ? (
+          <>
+            <AttachmentBubble payload={attachment} />
+            <SaveToDrive payload={attachment} />
+          </>
+        ) : m.body}
         <span className="meta-line">
           {formatTime(m.createdAt)}
           {mine && <Tick status={m.status} />}

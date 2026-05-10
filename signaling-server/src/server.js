@@ -21,6 +21,7 @@ import {
   ensureLastSeenColumn, attachPresenceRoutes, attachPresenceBroadcast,
 } from './chat/presence.js';
 import { REMOTE_SCHEMA_SQL, attachRemoteRoutes } from './remote/sessions.js';
+import { attachDriveRoutes } from './drive.js';
 import { createStorage } from './storage/index.js';
 
 const PORT = Number(process.env.PORT || 4000);
@@ -36,7 +37,7 @@ let dbReady = !USE_POSTGRES;
 
 const app = express();
 app.use(cors({ origin: CORS_ORIGIN }));
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json({ limit: '12mb' }));
 
 const pairing = new PairingRegistry();
 const users = new UserRegistry();
@@ -68,6 +69,7 @@ attachChatRoutes(app, requireAuth);
 if (USE_POSTGRES) registerExtraSchema(OAUTH_SCHEMA_SQL);
 attachPresenceRoutes(app, users, requireAuth);
 attachRemoteRoutes(app, pairing, users, requireAuth);
+attachDriveRoutes(app, storage, requireAuth);
 
 if (USE_POSTGRES) {
   registerExtraSchema(CHAT_SCHEMA_SQL);

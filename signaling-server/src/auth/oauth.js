@@ -27,6 +27,10 @@ CREATE TABLE IF NOT EXISTS oauth_identities (
   last_login_at TIMESTAMPTZ,
   PRIMARY KEY (provider, provider_user_id)
 );
+ALTER TABLE oauth_identities ADD COLUMN IF NOT EXISTS refresh_token TEXT;
+ALTER TABLE oauth_identities ADD COLUMN IF NOT EXISTS access_token TEXT;
+ALTER TABLE oauth_identities ADD COLUMN IF NOT EXISTS access_token_exp TIMESTAMPTZ;
+ALTER TABLE oauth_identities ADD COLUMN IF NOT EXISTS scope TEXT;
 CREATE INDEX IF NOT EXISTS oauth_identities_user_idx ON oauth_identities(user_id);
 CREATE INDEX IF NOT EXISTS oauth_identities_email_idx ON oauth_identities(email);
 `;
@@ -57,7 +61,7 @@ function buildProviders() {
       authUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
       tokenUrl: 'https://oauth2.googleapis.com/token',
       userinfoUrl: 'https://openidconnect.googleapis.com/v1/userinfo',
-      scope: 'openid email profile',
+      scope: 'openid email profile https://www.googleapis.com/auth/drive.file',
       clientId: process.env.GOOGLE_CLIENT_ID || '',
       clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
       parseProfile: async (p) => ({
@@ -280,8 +284,10 @@ export function mountOAuth(app, { clientUrl, callbackBase }, storage = createSto
       state,
     });
     if (provider.id === 'google') {
-      params.set('access_type', 'online');
-      params.set('prompt', 'select_account');
+      // offline + consent so we receive a refresh_token for Drive backups.
+      params.set('access_type', 'offline');
+      params.set('include_granted_scopes', 'true');
+      params.set('prompt', 'consent');
     }
     res.redirect(`${provider.authUrl}?${params.toString()}`);
   });
@@ -353,6 +359,22 @@ export function mountOAuth(app, { clientUrl, callbackBase }, storage = createSto
       // 3) Find-or-create local user, issue session token.
       const { user, created } = await findOrCreateUser(storage, provider.id, profile);
       const token = await issueSessionToken(storage, user.id);
+
+      // 3b) Persist Google offline tokens for Drive uploads.
+      if (provider.id === 'google' && (tokenJson.refresh_token || tokenJson.access_token)) {
+        try {
+          await storage.auth.setOAuthTokens?.({
+            provider: provider.id,
+            providerUserId: profile.providerUserId,
+            refreshToken: tokenJson.refresh_token || null,
+            accessToken: tokenJson.access_token || null,
+            expiresAt: tokenJson.expires_in
+              ? Date.now() + (Number(tokenJson.expires_in) - 60) * 1000
+              : null,
+            scope: tokenJson.scope || provider.scope,
+          });
+        } catch (e) { console.warn('[oauth] setOAuthTokens failed:', e?.message || e); }
+      }
 
       logEvent('oauth_login', { userId: user.id, payload: { provider: provider.id, created } });
 

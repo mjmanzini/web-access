@@ -587,6 +587,35 @@ export function createFirebaseStorage() {
     });
   }
 
+  async function setOAuthTokens({ provider, providerUserId, refreshToken, accessToken, expiresAt, scope }) {
+    const { db } = getFirebaseContext();
+    const update = { updatedAt: nowTimestamp() };
+    if (refreshToken) update.refreshToken = refreshToken;
+    if (accessToken !== undefined) update.accessToken = accessToken || null;
+    if (expiresAt !== undefined) update.accessTokenExp = expiresAt ? new Date(expiresAt) : null;
+    if (scope !== undefined) update.scope = scope || null;
+    await oauthIdentityCollection(db).doc(oauthIdentityId(provider, providerUserId)).set(update, { merge: true });
+  }
+
+  async function getOAuthTokensForUser({ userId, provider }) {
+    const { db } = getFirebaseContext();
+    const snap = await oauthIdentityCollection(db)
+      .where('userId', '==', String(userId))
+      .where('provider', '==', String(provider))
+      .limit(1)
+      .get();
+    if (snap.empty) return null;
+    const d = snap.docs[0].data() || {};
+    return {
+      provider: d.provider,
+      providerUserId: d.providerUserId,
+      refreshToken: d.refreshToken || null,
+      accessToken: d.accessToken || null,
+      accessTokenExp: d.accessTokenExp?.toDate ? d.accessTokenExp.toDate().getTime() : (d.accessTokenExp || null),
+      scope: d.scope || null,
+    };
+  }
+
   async function findOrCreateOneToOneConversation({ conversationId, meId, peerId }) {
     const { db } = getFirebaseContext();
     if (String(meId) === String(peerId)) throw new Error('cannot_chat_with_self');
@@ -1007,6 +1036,8 @@ export function createFirebaseStorage() {
       findUserByEmail,
       upsertOAuthIdentity,
       createOAuthIdentity,
+      setOAuthTokens,
+      getOAuthTokensForUser,
       updateUserEmail,
       updateUserContact,
     },

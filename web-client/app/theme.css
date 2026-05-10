@@ -1467,3 +1467,21 @@
   .call-quick-chat-peek { display: none; }
   .call-quick-chat { padding: 8px 10px; }
 }
+
+/* ===== Phase 6: Save to Drive button ===== */
+.att-drive-btn {
+  align-self: flex-start;
+  margin-top: 6px;
+  background: rgba(66,133,244,.12);
+  color: #4285f4;
+  border: 1px solid rgba(66,133,244,.35);
+  border-radius: 999px;
+  font-size: 11px;
+  padding: 3px 10px;
+  cursor: pointer;
+  font-weight: 600;
+}
+.att-drive-btn:hover { background: rgba(66,133,244,.22); }
+.att-drive-btn:disabled { opacity: 0.7; cursor: default; }
+.att-drive-btn.done { background: rgba(46,204,113,.14); color: #2ecc71; border-color: rgba(46,204,113,.35); }
+.bubble.has-attachment { display: flex; flex-direction: column; }
