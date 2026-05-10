@@ -23,7 +23,7 @@ jobs:
         working-directory: signaling-server
       - name: Audit production dependencies
         working-directory: signaling-server
-        run: npm audit --omit=dev
+        run: npm audit --omit=dev --audit-level=high
       - name: Syntax check all JS modules
         working-directory: signaling-server
         run: |
@@ -58,7 +58,7 @@ jobs:
         working-directory: web-client
       - name: Audit production dependencies
         working-directory: web-client
-        run: npm audit --omit=dev
+        run: npm audit --omit=dev --audit-level=high
       - name: Build (production)
         working-directory: web-client
         env:
