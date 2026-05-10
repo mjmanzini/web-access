@@ -29,7 +29,9 @@ const USE_HTTPS = process.env.HTTPS === '1' || process.env.HTTPS === 'true';
 const WEBAUTHN_ORIGIN = process.env.WEBAUTHN_ORIGIN || process.env.CLIENT_URL || 'http://localhost:3000';
 const WEBAUTHN_RP_NAME = process.env.WEBAUTHN_RP_NAME || 'Web-Access';
 const WEBAUTHN_RP_ID = process.env.WEBAUTHN_RP_ID || new URL(WEBAUTHN_ORIGIN).hostname;
-let dbReady = true;
+const STORAGE_BACKEND = process.env.STORAGE_BACKEND || 'postgres';
+const USE_POSTGRES = STORAGE_BACKEND === 'postgres';
+let dbReady = !USE_POSTGRES;
 
 const app = express();
 app.use(cors({ origin: CORS_ORIGIN }));
@@ -40,9 +42,12 @@ const users = new UserRegistry();
 
 app.use(authMiddleware(users));
 
-app.get('/healthz', (_req, res) => {
-  res.json({ ok: true, sessions: pairing.size(), dbReady });
-});
+const healthHandler = (_req, res) => {
+  res.json({ ok: true, sessions: pairing.size(), dbReady, storageBackend: STORAGE_BACKEND });
+};
+
+app.get('/healthz', healthHandler);
+app.get('/readyz', healthHandler);
 
 attachUserRoutes(app, users);
 attachAuthRoutes(app, users);
@@ -58,13 +63,15 @@ mountOAuth(app, {
     || `http://localhost:${PORT}`,
 });
 attachChatRoutes(app, requireAuth);
-registerExtraSchema(OAUTH_SCHEMA_SQL);
+if (USE_POSTGRES) registerExtraSchema(OAUTH_SCHEMA_SQL);
 attachPresenceRoutes(app, users, requireAuth);
 attachRemoteRoutes(app, pairing, users, requireAuth);
 
-registerExtraSchema(CHAT_SCHEMA_SQL);
-registerExtraSchema(REMOTE_SCHEMA_SQL);
-registerExtraSchema(WEBAUTHN_SCHEMA_SQL);
+if (USE_POSTGRES) {
+  registerExtraSchema(CHAT_SCHEMA_SQL);
+  registerExtraSchema(REMOTE_SCHEMA_SQL);
+  registerExtraSchema(WEBAUTHN_SCHEMA_SQL);
+}
 
 app.get('/ice', (_req, res) => {
   res.json({ iceServers: buildIceServers() });
@@ -108,12 +115,16 @@ attachSignaling(io, pairing);
 attachCallSignaling(io);
 attachUserSignaling(io, users);
 
-await initDb().catch((e) => {
-  dbReady = false;
-  console.error('[signaling] database unreachable — is Postgres running? (docker compose up -d postgres)');
-  console.error('[signaling] details:', e.message);
-});
-if (dbReady) {
+if (USE_POSTGRES) {
+  await initDb().catch((e) => {
+    dbReady = false;
+    console.error('[signaling] database unreachable — is Postgres running? (docker compose up -d postgres)');
+    console.error('[signaling] details:', e.message);
+  });
+} else {
+  console.log(`[signaling] storage backend=${STORAGE_BACKEND}; skipping Postgres schema init`);
+}
+if (USE_POSTGRES && dbReady) {
   await ensureLastSeenColumn().catch(() => {});
 }
 

@@ -87,6 +87,12 @@ The script:
 - sets `STORAGE_BACKEND=firebase`
 - optionally wires public URLs, WebAuthn origin/RP ID, and extra env vars/secrets
 
+After deployment, verify the signaling service with the Cloud Run-safe readiness endpoint:
+
+```powershell
+curl.exe -i https://YOUR_SIGNALING_URL/readyz
+```
+
 ## Required Runtime Configuration
 
 At minimum, the signaling service needs:
@@ -113,7 +119,7 @@ Recommended Cloud Run secrets:
 
 - Firebase does not host the Electron app. Distribute `host-electron/` separately.
 - Firebase does not replace TURN. Keep Coturn or another TURN provider.
-- The remaining Firebase migration work is still needed for `remote`, `chat`, and `presence` storage before the full signaling feature set is backend-complete.
+- Use `/readyz` for Cloud Run readiness checks. Some Google frontends reserve or intercept `/healthz`, while `/readyz` reaches the Express app directly.
 
 ## Rollout Order
 
