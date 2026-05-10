@@ -9,6 +9,7 @@ import { MessageList } from '../../components/chat/MessageList';
 import { Composer } from '../../components/chat/Composer';
 import { ChatClient, decryptChatMessage, isEncryptedBody, type ChatMessage } from '../../lib/chat-client';
 import { previewBody } from '../../lib/attachments';
+import { notify, setAppBadge, ensureNotificationPermission, notificationPermission } from '../../lib/notifications';
 import {
   api, clearStoredUser, listUsers, loadStoredUser, signalingUrl, verifyToken, type StoredUser, type PublicUser,
 } from '../../lib/user-session';
@@ -80,6 +81,7 @@ export default function ChatPage() {
   // Group conversations are keyed in the contact list as `g:<conversationId>`
   const groupMeta = useRef<Map<string, { title: string; members: { id: string; displayName: string }[] }>>(new Map());
   const activeIdRef = useRef<string | undefined>(undefined);
+  const contactsRef = useRef<Contact[]>([]);
 
   // Bootstrap: require a logged-in session, otherwise send to onboarding.
   useEffect(() => {
@@ -215,6 +217,23 @@ export default function ChatPage() {
           (peerId && peerId === activeIdRef.current) ||
           (groupMeta.current.has(m.conversationId) && `g:${m.conversationId}` === activeIdRef.current);
         if (isActive) cc.markRead(m.conversationId, m.id);
+        else {
+          // Notify the user — toaster + (when tab hidden) browser notification.
+          const groupKey = `g:${m.conversationId}`;
+          const contact = (peerId
+            ? contactsRef.current.find((c) => c.id === peerId)
+            : contactsRef.current.find((c) => c.id === groupKey)) || null;
+          const title = contact?.displayName || 'New message';
+          const target = peerId || groupKey;
+          void notify({
+            title,
+            body: previewBody(m.body),
+            href: `/chat#${encodeURIComponent(target)}`,
+            tag: `chat:${m.conversationId}`,
+            avatarUrl: contact?.avatarUrl || null,
+            kind: 'message',
+          });
+        }
       }
     });
 
@@ -258,6 +277,13 @@ export default function ChatPage() {
     socket.on('user:incoming-call', (payload: IncomingInvite) => {
       setInvite(payload);
       setNotice(null);
+      void notify({
+        title: `${payload.from.displayName} is calling`,
+        body: 'Tap to answer',
+        href: '/chat',
+        tag: `call:${payload.roomId}`,
+        kind: 'info',
+      });
     });
     socket.on('user:call-answered', ({ roomId, accepted, fromUserId }: { roomId: string; accepted: boolean; fromUserId: string }) => {
       setRinging((cur) => (cur && cur.toUserId === fromUserId ? null : cur));
@@ -269,6 +295,23 @@ export default function ChatPage() {
   }, [me]);
 
   useEffect(() => { activeIdRef.current = activeId; }, [activeId]);
+
+  // Keep a ref so the socket callback can read latest contacts without re-subscribing.
+  useEffect(() => { contactsRef.current = contacts; }, [contacts]);
+
+  // Total unread → app badge + ask for notification permission once.
+  useEffect(() => {
+    const total = contacts.reduce((n, c) => n + (c.unread || 0), 0);
+    void setAppBadge(total);
+  }, [contacts]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (notificationPermission() === 'default') {
+      // Lazily prompt the first time the chat page is opened.
+      void ensureNotificationPermission();
+    }
+  }, []);
 
   const active = useMemo(() => contacts.find((c) => c.id === activeId), [contacts, activeId]);
   const isGroupActive = !!activeId && activeId.startsWith('g:');

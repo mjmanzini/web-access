@@ -56,3 +56,42 @@ self.addEventListener('fetch', (event) => {
     );
   }
 });
+
+// ---------------------------------------------------------------------------
+// Notifications
+// ---------------------------------------------------------------------------
+
+self.addEventListener('push', (event) => {
+  let payload = {};
+  try { payload = event.data ? event.data.json() : {}; } catch { payload = { title: event.data && event.data.text() }; }
+  const title = payload.title || 'Web-Access';
+  const opts = {
+    body: payload.body || '',
+    tag: payload.tag || 'web-access',
+    icon: payload.icon || '/icons/icon-192.svg',
+    badge: '/icons/icon-192.svg',
+    data: { href: payload.href || '/chat' },
+  };
+  event.waitUntil(self.registration.showNotification(title, opts));
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const target = (event.notification.data && event.notification.data.href) || '/chat';
+  event.waitUntil((async () => {
+    const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const client of all) {
+      try {
+        const url = new URL(client.url);
+        if (url.origin === self.location.origin) {
+          await client.focus();
+          if (target && url.pathname + url.hash !== target) {
+            try { client.navigate(target); } catch { /* not supported */ }
+          }
+          return;
+        }
+      } catch { /* ignore */ }
+    }
+    await self.clients.openWindow(target);
+  })());
+});

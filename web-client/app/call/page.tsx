@@ -583,6 +583,36 @@ function CallInner() {
         )}
       </main>
 
+      <div className="call-quick-chat" aria-label="Send a message">
+        {chat.length > 0 && (
+          <button
+            type="button"
+            className="call-quick-chat-peek"
+            onClick={() => { setChatOpen(true); setParticipantsOpen(false); }}
+            title="Open chat"
+          >
+            <span className="call-quick-chat-from">{chat[chat.length - 1].fromName}</span>
+            <span className="call-quick-chat-text">{chat[chat.length - 1].text}</span>
+          </button>
+        )}
+        <input
+          className="call-quick-chat-input"
+          value={chatDraft}
+          onChange={(e) => setChatDraft(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void sendChat(); } }}
+          placeholder="Message everyone in this call…"
+          maxLength={2000}
+          aria-label="Message"
+        />
+        <button
+          type="button"
+          className="call-quick-chat-send"
+          onClick={() => void sendChat()}
+          disabled={!chatDraft.trim()}
+          aria-label="Send message"
+        >➤</button>
+      </div>
+
       <footer className="call-controls">
         <button className={`ctl ${!mic ? 'danger' : ''}`} onClick={() => void toggleMic()} title={mic ? 'Mute' : 'Unmute'}>
           <span className="ctl-icon">{mic ? '🎤' : '🔇'}</span>

@@ -3,6 +3,7 @@ import Script from 'next/script';
 import './globals.css';
 import './theme.css';
 import { ThemeProvider } from '../components/theme/ThemeProvider';
+import { Toaster } from '../components/ui/Toaster';
 
 export const metadata: Metadata = {
   title: 'Web-Access',
@@ -28,6 +29,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en">
       <body>
         <ThemeProvider>{children}</ThemeProvider>
+        <Toaster />
         <Script id="register-sw" strategy="afterInteractive">
           {`if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
