@@ -21,6 +21,7 @@ import {
   ensureLastSeenColumn, attachPresenceRoutes, attachPresenceBroadcast,
 } from './chat/presence.js';
 import { REMOTE_SCHEMA_SQL, attachRemoteRoutes } from './remote/sessions.js';
+import { createStorage } from './storage/index.js';
 
 const PORT = Number(process.env.PORT || 4000);
 const CORS_ORIGIN = process.env.CORS_ORIGIN || '*';
@@ -39,6 +40,7 @@ app.use(express.json());
 
 const pairing = new PairingRegistry();
 const users = new UserRegistry();
+const storage = createStorage({ backend: STORAGE_BACKEND });
 
 app.use(authMiddleware(users));
 
