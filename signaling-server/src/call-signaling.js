@@ -14,6 +14,7 @@
  *   call:chat              { text }                             -> { ok, message }
  *   call:ring              { roomId, toPeerId? }                -> { ok }    // incoming-call notification
  *   call:ring-response     { roomId, accepted }                 -> { ok }
+ *   call:p2p-signal        { toPeerId, description?, candidate? } -> { ok }
  *
  * Broadcast events (server -> clients in a room):
  *   call:peer-joined     { peer }
@@ -24,6 +25,7 @@
  *   call:chat            { message }
  *   call:ring            { fromPeer, roomId }
  *   call:ring-response   { fromPeer, roomId, accepted }
+ *   call:p2p-signal      { fromPeerId, description?, candidate? }
  */
 import { RoomRegistry } from './mediasoup-room.js';
 import { ANNOUNCED_IP } from './mediasoup-worker.js';
@@ -77,18 +79,32 @@ export function attachCallSignaling(io) {
         peer: { id: peer.id, name: peer.name, mic: peer.mic, cam: peer.cam, screen: peer.screen, joinedAt: peer.joinedAt },
       });
 
-      const router = await room.router();
       return {
         self: { id: peer.id, name: peer.name },
-        rtpCapabilities: router.rtpCapabilities,
+        rtpCapabilities: null,
         peers: room.presence().filter((p) => p.id !== peer.id),
-        existingProducers: room.otherProducers(peer.id),
+        existingProducers: [],
         chat: room.chat.slice(-CHAT_HISTORY),
         mediaConfig: {
           announcedIp: ANNOUNCED_IP,
-          requiresDirectMediaPorts: true,
+          requiresDirectMediaPorts: false,
+          mode: 'p2p',
         },
       };
+    }));
+
+    socket.on('call:p2p-signal', wrap(async ({ toPeerId, description, candidate }) => {
+      if (!membership) throw new Error('not in a call');
+      if (!toPeerId) throw new Error('toPeerId required');
+      const room = rooms.get(membership.roomId);
+      const target = room?.peers.get(String(toPeerId));
+      if (!room || !target) throw new Error('peer_missing');
+      io.to(target.socketId).emit('call:p2p-signal', {
+        fromPeerId: membership.peerId,
+        description: description || null,
+        candidate: candidate || null,
+      });
+      return {};
     }));
 
     socket.on('call:create-transport', wrap(async ({ direction }) => {

@@ -1,30 +1,20 @@
 /**
- * Thin wrapper around mediasoup-client that handles the full call lifecycle:
- *   - load the Device with the router's RTP capabilities
- *   - create send + recv WebRTC transports
- *   - produce local mic/cam/screen tracks
- *   - consume remote producers (and auto-subscribe to new ones as peers join)
+ * Browser-to-browser WebRTC call client.
  *
- * Emits small events that the UI renders directly:
- *   remoteTrack / trackEnded / peerJoined / peerLeft / peerState / chat / error
+ * Cloud Run is a good fit for Socket.IO signaling, but it cannot expose the
+ * arbitrary UDP/TCP media port range required by mediasoup SFU transports.
+ * This client keeps the existing call UI contract while sending media directly
+ * between browsers over RTCPeerConnection.
  */
-import { Device, types as msTypes } from 'mediasoup-client';
-type Transport = msTypes.Transport;
-type Producer = msTypes.Producer;
-type Consumer = msTypes.Consumer;
 import type { Socket } from 'socket.io-client';
-import type {
-  PeerInfo,
-  ExistingProducerInfo,
-  ChatMessage,
-  JoinResult,
-} from './call-protocol';
+import type { ChatMessage, JoinResult, PeerInfo } from './call-protocol';
 
 type Listener<T> = (payload: T) => void;
+type ProducerKey = 'mic' | 'cam' | 'screen';
 
 export interface RemoteTrack {
   peerId: string;
-  consumer: Consumer;
+  consumer: null;
   track: MediaStreamTrack;
   kind: 'audio' | 'video';
   source: 'camera' | 'mic' | 'screen';
@@ -41,13 +31,21 @@ export interface CallEvents {
   closed: void;
 }
 
+interface PeerConnectionState {
+  pc: RTCPeerConnection;
+  makingOffer: boolean;
+  pendingCandidates: RTCIceCandidateInit[];
+  remoteVideoCount: number;
+}
+
+const ICE_SERVERS: RTCIceServer[] = [
+  { urls: ['stun:stun.l.google.com:19302'] },
+];
+
 export class CallClient {
   private socket: Socket;
-  private device = new Device();
-  private sendTransport: Transport | null = null;
-  private recvTransport: Transport | null = null;
-  private producers = new Map<string, Producer>();
-  private consumers = new Map<string, Consumer>();
+  private connections = new Map<string, PeerConnectionState>();
+  private localTracks = new Map<ProducerKey, MediaStreamTrack>();
   private listeners = new Map<keyof CallEvents, Set<Listener<unknown>>>();
   self: { id: string; name: string } | null = null;
   peers = new Map<string, PeerInfo>();
@@ -63,8 +61,11 @@ export class CallClient {
     set.add(cb as Listener<unknown>);
     return () => set!.delete(cb as Listener<unknown>);
   }
+
   private emit<K extends keyof CallEvents>(ev: K, payload: CallEvents[K]) {
-    this.listeners.get(ev)?.forEach((l) => { try { (l as Listener<CallEvents[K]>)(payload); } catch { /* ignore */ } });
+    this.listeners.get(ev)?.forEach((listener) => {
+      try { (listener as Listener<CallEvents[K]>)(payload); } catch { /* ignore */ }
+    });
   }
 
   private request<T = unknown>(event: string, data: unknown): Promise<T> {
@@ -81,21 +82,28 @@ export class CallClient {
     this.socket.on('call:peer-joined', ({ peer }: { peer: PeerInfo }) => {
       this.peers.set(peer.id, peer);
       this.emit('peerJoined', peer);
+      this.ensureConnection(peer.id);
     });
     this.socket.on('call:peer-left', ({ peerId }: { peerId: string }) => {
       this.peers.delete(peerId);
+      this.closeConnection(peerId);
       this.emit('peerLeft', { peerId });
     });
-    this.socket.on('call:peer-state', (s: { peerId: string; mic: boolean; cam: boolean; screen: boolean }) => {
-      const p = this.peers.get(s.peerId);
-      if (p) { p.mic = s.mic; p.cam = s.cam; p.screen = s.screen; }
-      this.emit('peerState', s);
+    this.socket.on('call:peer-state', (state: { peerId: string; mic: boolean; cam: boolean; screen: boolean }) => {
+      const peer = this.peers.get(state.peerId);
+      if (peer) {
+        peer.mic = state.mic;
+        peer.cam = state.cam;
+        peer.screen = state.screen;
+      }
+      this.emit('peerState', state);
     });
-    this.socket.on('call:new-producer', async (info: ExistingProducerInfo) => {
-      try { await this.subscribeTo(info); } catch (err) { this.emit('error', err as Error); }
-    });
-    this.socket.on('call:producer-closed', ({ peerId, producerId }: { peerId: string; producerId: string }) => {
-      this.emit('trackEnded', { peerId, producerId });
+    this.socket.on('call:p2p-signal', (signal: {
+      fromPeerId: string;
+      description?: RTCSessionDescriptionInit;
+      candidate?: RTCIceCandidateInit;
+    }) => {
+      void this.handleSignal(signal).catch((err) => this.emit('error', err as Error));
     });
     this.socket.on('call:chat', ({ message }: { message: ChatMessage }) => this.emit('chat', message));
   }
@@ -103,154 +111,164 @@ export class CallClient {
   async join(roomId: string, name: string) {
     const result = await this.request<JoinResult & { ok: true }>('call:join', { roomId, name });
     this.self = result.self;
-    for (const p of result.peers) this.peers.set(p.id, p);
-    // @ts-expect-error RtpCapabilities typing
-    await this.device.load({ routerRtpCapabilities: result.rtpCapabilities });
-    await this.createTransports();
-    for (const ep of result.existingProducers) {
-      try { await this.subscribeTo(ep); } catch (err) { this.emit('error', err as Error); }
+    for (const peer of result.peers) {
+      this.peers.set(peer.id, peer);
+      this.ensureConnection(peer.id);
     }
     return result;
   }
 
-  private async createTransports() {
-    this.sendTransport = await this.createTransport('send');
-    this.recvTransport = await this.createTransport('recv');
-  }
-
-  private async createTransport(direction: 'send' | 'recv'): Promise<Transport> {
-    type CreateResp = {
-      id: string;
-      iceParameters: unknown; iceCandidates: unknown; dtlsParameters: unknown;
-    };
-    const info = await this.request<CreateResp>('call:create-transport', { direction });
-    const opts = {
-      id: info.id,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      iceParameters: info.iceParameters as any,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      iceCandidates: info.iceCandidates as any,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      dtlsParameters: info.dtlsParameters as any,
-    };
-    const transport = direction === 'send'
-      ? this.device.createSendTransport(opts)
-      : this.device.createRecvTransport(opts);
-
-    transport.on('connect', async ({ dtlsParameters }, cb, errb) => {
-      try {
-        await this.request('call:connect-transport', { transportId: transport.id, dtlsParameters });
-        cb();
-      } catch (e) { errb(e as Error); }
-    });
-
-    if (direction === 'send') {
-      transport.on('produce', async ({ kind, rtpParameters, appData }, cb, errb) => {
-        try {
-          const { id } = await this.request<{ id: string }>('call:produce', {
-            transportId: transport.id, kind, rtpParameters, appData,
-          });
-          cb({ id });
-        } catch (e) { errb(e as Error); }
-      });
-    }
-
-    return transport;
-  }
-
   async produceMic(track: MediaStreamTrack) {
-    if (!this.sendTransport) throw new Error('no_send_transport');
-    const producer = await this.sendTransport.produce({
-      track,
-      appData: { source: 'mic' },
-      codecOptions: { opusStereo: true, opusDtx: true },
-    });
-    this.producers.set('mic', producer);
-    return producer;
+    await this.addLocalTrack('mic', track);
+    return { id: track.id };
   }
+
   async produceCam(track: MediaStreamTrack) {
-    if (!this.sendTransport) throw new Error('no_send_transport');
-    const producer = await this.sendTransport.produce({
-      track,
-      appData: { source: 'camera' },
-      encodings: [
-        { rid: 'r0', maxBitrate: 150_000, scaleResolutionDownBy: 4 },
-        { rid: 'r1', maxBitrate: 500_000, scaleResolutionDownBy: 2 },
-        { rid: 'r2', maxBitrate: 1_500_000 },
-      ],
-      codecOptions: { videoGoogleStartBitrate: 600 },
-    });
-    this.producers.set('cam', producer);
-    return producer;
+    await this.addLocalTrack('cam', track);
+    return { id: track.id };
   }
+
   async produceScreen(track: MediaStreamTrack) {
-    if (!this.sendTransport) throw new Error('no_send_transport');
-    const producer = await this.sendTransport.produce({
-      track,
-      appData: { source: 'screen' },
-      encodings: [{ maxBitrate: 3_000_000 }],
-      codecOptions: { videoGoogleStartBitrate: 1200 },
-    });
-    this.producers.set('screen', producer);
-    return producer;
+    await this.addLocalTrack('screen', track);
+    return { id: track.id };
   }
 
-  async closeProducer(key: 'mic' | 'cam' | 'screen') {
-    const p = this.producers.get(key);
-    if (!p) return;
-    try { p.close(); } catch { /* ignore */ }
-    this.producers.delete(key);
-    await this.request('call:close-producer', { producerId: p.id });
+  async closeProducer(key: ProducerKey) {
+    const track = this.localTracks.get(key);
+    if (!track) return;
+    this.localTracks.delete(key);
+    for (const { pc } of this.connections.values()) {
+      for (const sender of pc.getSenders()) {
+        if (sender.track === track) pc.removeTrack(sender);
+      }
+    }
+    this.emit('trackEnded', { peerId: this.self?.id || 'self', producerId: track.id });
   }
 
-  async setState(s: Partial<{ mic: boolean; cam: boolean; screen: boolean }>) {
-    await this.request('call:state', s);
+  async setState(state: Partial<{ mic: boolean; cam: boolean; screen: boolean }>) {
+    await this.request('call:state', state);
   }
 
   async sendChat(text: string) {
     await this.request('call:chat', { text });
   }
 
-  private async subscribeTo(info: ExistingProducerInfo) {
-    if (!this.recvTransport) return;
-    type ConsumeResp = {
-      id: string; producerId: string; kind: 'audio' | 'video';
-      rtpParameters: unknown; appData: Record<string, unknown>;
+  private async addLocalTrack(key: ProducerKey, track: MediaStreamTrack) {
+    this.localTracks.set(key, track);
+    for (const peerId of this.peers.keys()) {
+      const state = this.ensureConnection(peerId);
+      if (!state.pc.getSenders().some((sender) => sender.track === track)) {
+        state.pc.addTrack(track, new MediaStream([track]));
+      }
+    }
+  }
+
+  private ensureConnection(peerId: string): PeerConnectionState {
+    const existing = this.connections.get(peerId);
+    if (existing) return existing;
+
+    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    const state: PeerConnectionState = {
+      pc,
+      makingOffer: false,
+      pendingCandidates: [],
+      remoteVideoCount: 0,
     };
-    const resp = await this.request<ConsumeResp>('call:consume', {
-      producerId: info.producerId,
-      rtpCapabilities: this.device.rtpCapabilities,
-    });
-    const consumer = await this.recvTransport.consume({
-      id: resp.id,
-      producerId: resp.producerId,
-      kind: resp.kind,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      rtpParameters: resp.rtpParameters as any,
-      appData: resp.appData,
-    });
-    this.consumers.set(consumer.id, consumer);
-    await this.request('call:resume-consumer', { consumerId: consumer.id });
-    const source = (resp.appData?.source as RemoteTrack['source']) || (resp.kind === 'audio' ? 'mic' : 'camera');
-    this.emit('remoteTrack', {
-      peerId: info.peerId,
-      consumer,
-      track: consumer.track,
-      kind: resp.kind,
-      source,
-    });
-    consumer.on('trackended', () => this.emit('trackEnded', { peerId: info.peerId, producerId: info.producerId }));
+    this.connections.set(peerId, state);
+
+    for (const track of this.localTracks.values()) {
+      pc.addTrack(track, new MediaStream([track]));
+    }
+
+    pc.onicecandidate = ({ candidate }) => {
+      if (candidate) this.sendSignal(peerId, { candidate: candidate.toJSON() });
+    };
+    pc.onnegotiationneeded = async () => {
+      try {
+        state.makingOffer = true;
+        await pc.setLocalDescription();
+        if (pc.localDescription) this.sendSignal(peerId, { description: pc.localDescription.toJSON() });
+      } catch (err) {
+        this.emit('error', err as Error);
+      } finally {
+        state.makingOffer = false;
+      }
+    };
+    pc.ontrack = ({ track }) => {
+      const source = this.trackSourceFor(peerId, track.kind);
+      this.emit('remoteTrack', {
+        peerId,
+        consumer: null,
+        track,
+        kind: track.kind as 'audio' | 'video',
+        source,
+      });
+      track.addEventListener('ended', () => this.emit('trackEnded', { peerId, producerId: track.id }));
+    };
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === 'failed') void pc.restartIce();
+    };
+
+    return state;
+  }
+
+  private trackSourceFor(peerId: string, kind: string): RemoteTrack['source'] {
+    if (kind === 'audio') return 'mic';
+    const state = this.connections.get(peerId);
+    const peer = this.peers.get(peerId);
+    const source = peer?.screen && state && state.remoteVideoCount > 0 ? 'screen' : 'camera';
+    if (state) state.remoteVideoCount += 1;
+    return source;
+  }
+
+  private async handleSignal({ fromPeerId, description, candidate }: {
+    fromPeerId: string;
+    description?: RTCSessionDescriptionInit;
+    candidate?: RTCIceCandidateInit;
+  }) {
+    if (!fromPeerId) return;
+    const state = this.ensureConnection(fromPeerId);
+    const { pc } = state;
+
+    if (description) {
+      const offerCollision = description.type === 'offer' && (state.makingOffer || pc.signalingState !== 'stable');
+      const polite = this.isPolitePeer(fromPeerId);
+      if (offerCollision && !polite) return;
+
+      await pc.setRemoteDescription(description);
+      for (const queued of state.pendingCandidates.splice(0)) {
+        try { await pc.addIceCandidate(queued); } catch { /* ignore */ }
+      }
+      if (description.type === 'offer') {
+        await pc.setLocalDescription();
+        if (pc.localDescription) this.sendSignal(fromPeerId, { description: pc.localDescription.toJSON() });
+      }
+    }
+
+    if (candidate) {
+      if (pc.remoteDescription) await pc.addIceCandidate(candidate);
+      else state.pendingCandidates.push(candidate);
+    }
+  }
+
+  private isPolitePeer(peerId: string) {
+    return String(this.self?.id || '') > String(peerId);
+  }
+
+  private sendSignal(toPeerId: string, payload: { description?: RTCSessionDescriptionInit; candidate?: RTCIceCandidateInit }) {
+    this.socket.emit('call:p2p-signal', { toPeerId, ...payload });
+  }
+
+  private closeConnection(peerId: string) {
+    const state = this.connections.get(peerId);
+    if (!state) return;
+    try { state.pc.close(); } catch { /* ignore */ }
+    this.connections.delete(peerId);
   }
 
   async leave() {
-    for (const p of this.producers.values()) { try { p.close(); } catch { /* ignore */ } }
-    for (const c of this.consumers.values()) { try { c.close(); } catch { /* ignore */ } }
-    this.producers.clear();
-    this.consumers.clear();
-    try { this.sendTransport?.close(); } catch { /* ignore */ }
-    try { this.recvTransport?.close(); } catch { /* ignore */ }
-    this.sendTransport = null;
-    this.recvTransport = null;
+    this.localTracks.clear();
+    for (const peerId of Array.from(this.connections.keys())) this.closeConnection(peerId);
     try { await this.request('call:leave', {}); } catch { /* ignore */ }
     this.emit('closed', undefined as never);
   }

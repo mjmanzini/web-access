@@ -118,7 +118,6 @@ export class RoomRegistry {
     let room = this._rooms.get(id);
     if (!room) {
       room = new CallRoom(id);
-      await room.router(); // warm up
       this._rooms.set(id, room);
     }
     return room;

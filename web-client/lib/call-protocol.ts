@@ -6,6 +6,7 @@
 export interface CallMediaConfig {
   announcedIp: string;
   requiresDirectMediaPorts: boolean;
+  mode?: 'p2p' | 'mediasoup';
 }
 
 export interface PeerInfo {
