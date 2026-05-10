@@ -623,6 +623,40 @@ export function createFirebaseStorage() {
     });
   }
 
+  async function createGroupConversation({ conversationId, creatorId, memberIds, title }) {
+    const { db } = getFirebaseContext();
+    const ids = Array.from(new Set([String(creatorId), ...memberIds.map(String)]));
+    if (ids.length < 2) throw new Error('group_needs_members');
+    if (ids.length > 256) throw new Error('group_too_large');
+
+    const conversationRef = conversationCollection(db).doc(String(conversationId));
+    const createdAt = nowTimestamp();
+    const cleanTitle = String(title || '').trim().slice(0, 80) || null;
+
+    return db.runTransaction(async (tx) => {
+      tx.create(conversationRef, {
+        isGroup: true,
+        title: cleanTitle,
+        createdBy: String(creatorId),
+        createdAt,
+        lastMsgAt: null,
+      });
+      for (const userId of ids) {
+        tx.create(
+          conversationMemberCollection(db).doc(conversationMemberId(conversationId, userId)),
+          {
+            conversationId: String(conversationId),
+            userId,
+            joinedAt: createdAt,
+            lastReadAt: null,
+            role: userId === String(creatorId) ? 'admin' : 'member',
+          },
+        );
+      }
+      return String(conversationId);
+    });
+  }
+
   async function listConversations(userId) {
     const { db } = getFirebaseContext();
     const membershipSnap = await conversationMemberCollection(db).where('userId', '==', String(userId)).get();
@@ -645,7 +679,7 @@ export function createFirebaseStorage() {
       const latestMessage = messages[0] || null;
       const members = await Promise.all(memberSnap.docs
         .map((doc) => doc.data() || {})
-        .filter((row) => row.userId !== String(userId))
+        .filter((row) => Boolean(conversation.isGroup) || row.userId !== String(userId))
         .map(async (row) => {
           const user = await getUserById(db, row.userId);
           return user ? { id: user.id, displayName: user.displayName } : null;
@@ -968,6 +1002,7 @@ export function createFirebaseStorage() {
 
     chat: {
       findOrCreateOneToOneConversation,
+      createGroupConversation,
       listConversations,
       listMessages,
       persistMessage,

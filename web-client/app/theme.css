@@ -843,6 +843,53 @@
   }
 }
 
+/* ----- New Group modal ----- */
+.new-group-modal { width: min(560px, 100%); }
+.group-member-picker {
+  margin-top: 14px;
+  max-height: 320px;
+  overflow-y: auto;
+  border-radius: 8px;
+  border: 1px solid var(--wa-subtle-border);
+  background: var(--wa-input-bg);
+  padding: 4px;
+}
+.group-empty {
+  padding: 18px;
+  text-align: center;
+  color: var(--wa-muted);
+  font-size: 13px;
+}
+.group-member-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+.group-member-row:hover { background: var(--wa-card-hover); }
+.group-member-row.selected { background: rgba(0, 168, 132, .14); }
+.group-member-row input[type="checkbox"] {
+  width: 18px; height: 18px;
+  accent-color: var(--wa-accent);
+}
+.group-member-avatar {
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  display: grid; place-items: center;
+  background: linear-gradient(135deg, #6a7c8c, #44525e);
+  color: #fff;
+  font-weight: 600;
+  font-size: 14px;
+}
+.group-member-name {
+  flex: 1;
+  font-size: 14px;
+  color: var(--wa-text);
+}
+
 /* ----- Messages ----- */
 .messages {
   flex: 1; overflow-y: auto;

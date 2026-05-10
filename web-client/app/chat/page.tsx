@@ -65,12 +65,19 @@ export default function ChatPage() {
   const [contactDraft, setContactDraft] = useState({ displayName: '', email: '' });
   const [contactBusy, setContactBusy] = useState(false);
   const [contactError, setContactError] = useState<string | null>(null);
+  const [showNewGroup, setShowNewGroup] = useState(false);
+  const [groupTitle, setGroupTitle] = useState('');
+  const [groupMembers, setGroupMembers] = useState<Set<string>>(new Set());
+  const [groupBusy, setGroupBusy] = useState(false);
+  const [groupError, setGroupError] = useState<string | null>(null);
   const clientRef = useRef<ChatClient | null>(null);
   const socketRef = useRef<Socket | null>(null);
   // Map peerUserId <-> conversationId for 1:1 chats so the contact list
   // can be keyed by user while the server uses conversation IDs.
   const userToConv = useRef<Map<string, string>>(new Map());
   const convToUser = useRef<Map<string, string>>(new Map());
+  // Group conversations are keyed in the contact list as `g:<conversationId>`
+  const groupMeta = useRef<Map<string, { title: string; members: { id: string; displayName: string }[] }>>(new Map());
   const activeIdRef = useRef<string | undefined>(undefined);
 
   // Bootstrap: require a logged-in session, otherwise send to onboarding.
@@ -105,10 +112,17 @@ export default function ChatPage() {
       if (cancelled) return;
 
       for (const c of conv) {
-        const peer = (c.members ?? []).find((m) => m && m.id !== me.id);
-        if (!peer || c.is_group) continue;
-        userToConv.current.set(peer.id, c.id);
-        convToUser.current.set(c.id, peer.id);
+        if (c.is_group) {
+          groupMeta.current.set(c.id, {
+            title: c.title || 'Group',
+            members: c.members || [],
+          });
+        } else {
+          const peer = (c.members ?? []).find((m) => m && m.id !== me.id);
+          if (!peer) continue;
+          userToConv.current.set(peer.id, c.id);
+          convToUser.current.set(c.id, peer.id);
+        }
       }
 
       const mergedUsers = new Map<string, KnownContact>();
@@ -119,7 +133,7 @@ export default function ChatPage() {
         if (u.id !== me.id) mergedUsers.set(contactKey(u), { ...(mergedUsers.get(contactKey(u)) || {}), ...u });
       }
 
-      const list: Contact[] = [...mergedUsers.values()]
+      const userList: Contact[] = [...mergedUsers.values()]
         .map((u) => {
           const cid = userToConv.current.get(u.id);
           const meta = cid ? conv.find((c) => c.id === cid) : null;
@@ -133,7 +147,21 @@ export default function ChatPage() {
             lastMessageAt: meta?.last_msg_at ?? u.lastContactAt ?? undefined,
             unread: meta?.unread ?? 0,
           };
-        })
+        });
+
+      const groupList: Contact[] = conv
+        .filter((c) => c.is_group)
+        .map((c) => ({
+          id: `g:${c.id}`,
+          displayName: c.title || 'Group',
+          lastMessage: c.last_body
+            ? (isEncryptedBody(c.last_body) ? 'Encrypted message' : c.last_body)
+            : `${(c.members || []).length} members`,
+          lastMessageAt: c.last_msg_at ?? undefined,
+          unread: c.unread ?? 0,
+        }));
+
+      const list: Contact[] = [...userList, ...groupList]
         .sort((a, b) => {
           const aT = a.lastMessageAt ?? ''; const bT = b.lastMessageAt ?? '';
           if (aT && !bT) return -1; if (!aT && bT) return 1;
@@ -169,9 +197,22 @@ export default function ChatPage() {
           unread: m.senderId !== me.id && peerId !== activeIdRef.current
                   ? (c.unread ?? 0) + 1 : 0,
         } : c));
+      } else if (groupMeta.current.has(m.conversationId)) {
+        // Group conversation
+        const groupKey = `g:${m.conversationId}`;
+        setContacts((prev) => prev.map((c) => c.id === groupKey ? {
+          ...c,
+          lastMessage: previewBody(m.body),
+          lastMessageAt: m.createdAt,
+          unread: m.senderId !== me.id && groupKey !== activeIdRef.current
+                  ? (c.unread ?? 0) + 1 : 0,
+        } : c));
       }
-      if (m.senderId !== me.id && convToUser.current.get(m.conversationId) === activeIdRef.current) {
-        cc.markRead(m.conversationId, m.id);
+      if (m.senderId !== me.id) {
+        const isActive =
+          (peerId && peerId === activeIdRef.current) ||
+          (groupMeta.current.has(m.conversationId) && `g:${m.conversationId}` === activeIdRef.current);
+        if (isActive) cc.markRead(m.conversationId, m.id);
       }
     });
 
@@ -228,21 +269,32 @@ export default function ChatPage() {
   useEffect(() => { activeIdRef.current = activeId; }, [activeId]);
 
   const active = useMemo(() => contacts.find((c) => c.id === activeId), [contacts, activeId]);
+  const isGroupActive = !!activeId && activeId.startsWith('g:');
+  const activeConversationId = useMemo(() => {
+    if (!activeId) return undefined;
+    if (activeId.startsWith('g:')) return activeId.slice(2);
+    return userToConv.current.get(activeId);
+  }, [activeId, contacts]);
 
-  const openContact = async (peerUserId: string) => {
+  const openContact = async (id: string) => {
     if (!me) return;
-    setActiveId(peerUserId);
-    setContacts((prev) => prev.map((c) => c.id === peerUserId ? { ...c, unread: 0 } : c));
+    setActiveId(id);
+    setContacts((prev) => prev.map((c) => c.id === id ? { ...c, unread: 0 } : c));
 
-    let cid = userToConv.current.get(peerUserId);
-    if (!cid) {
-      const r = await api<{ id: string }>('/api/conversations', {
-        method: 'POST', body: JSON.stringify({ peerUserId }),
-      }).catch(() => null);
-      if (!r) return;
-      cid = r.id;
-      userToConv.current.set(peerUserId, cid);
-      convToUser.current.set(cid, peerUserId);
+    let cid: string | undefined;
+    if (id.startsWith('g:')) {
+      cid = id.slice(2);
+    } else {
+      cid = userToConv.current.get(id);
+      if (!cid) {
+        const r = await api<{ id: string }>('/api/conversations', {
+          method: 'POST', body: JSON.stringify({ peerUserId: id }),
+        }).catch(() => null);
+        if (!r) return;
+        cid = r.id;
+        userToConv.current.set(id, cid);
+        convToUser.current.set(cid, id);
+      }
     }
     if (!threads[cid]) {
       const r = await api<{ messages: ChatMessage[] }>(
@@ -256,7 +308,7 @@ export default function ChatPage() {
   };
 
   const startCall = useCallback((kind: 'voice' | 'video') => {
-    if (!active || !me || !socketRef.current) return;
+    if (!active || !me || !socketRef.current || isGroupActive) return;
     const roomId = `dm-${[me.id, active.id].sort().join('-')}-${Math.random().toString(36).slice(2, 8)}`;
     setRinging({ toUserId: active.id, roomId });
     setNotice(`${kind === 'video' ? 'Video' : 'Voice'} calling ${active.displayName}...`);
@@ -266,7 +318,7 @@ export default function ChatPage() {
         setNotice(res?.error === 'user_offline' ? `${active.displayName} is offline.` : 'Call could not be placed.');
       }
     });
-  }, [active, me]);
+  }, [active, me, isGroupActive]);
 
   const cancelCall = useCallback(() => {
     if (!ringing || !socketRef.current) return;
@@ -360,10 +412,60 @@ export default function ChatPage() {
     }
   }, [contactDraft, openContact]);
 
+  const closeNewGroup = useCallback(() => {
+    if (groupBusy) return;
+    setShowNewGroup(false);
+    setGroupError(null);
+  }, [groupBusy]);
+
+  const toggleGroupMember = useCallback((id: string) => {
+    setGroupMembers((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const submitNewGroup = useCallback(async () => {
+    const title = groupTitle.trim();
+    if (title.length < 2) { setGroupError('Group needs a name.'); return; }
+    if (groupMembers.size < 1) { setGroupError('Pick at least one member.'); return; }
+    setGroupBusy(true);
+    setGroupError(null);
+    try {
+      const r = await api<{ id: string; isGroup: boolean }>('/api/conversations', {
+        method: 'POST',
+        body: JSON.stringify({ title, memberIds: [...groupMembers] }),
+      });
+      if (!me) return;
+      const memberObjs = contacts
+        .filter((c) => groupMembers.has(c.id))
+        .map((c) => ({ id: c.id, displayName: c.displayName }));
+      groupMeta.current.set(r.id, { title, members: memberObjs });
+      setContacts((prev) => [
+        {
+          id: `g:${r.id}`,
+          displayName: title,
+          lastMessage: `${memberObjs.length + 1} members`,
+          lastMessageAt: undefined,
+          unread: 0,
+        },
+        ...prev,
+      ]);
+      setShowNewGroup(false);
+      setGroupTitle('');
+      setGroupMembers(new Set());
+      await openContact(`g:${r.id}`);
+    } catch (e) {
+      setGroupError((e as Error).message || 'Could not create group.');
+    } finally {
+      setGroupBusy(false);
+    }
+  }, [groupTitle, groupMembers, contacts, me, openContact]);
+
   const send = (text: string) => {
-    if (!activeId || !me) return;
-    const cid = userToConv.current.get(activeId);
-    if (!cid) return;
+    if (!activeId || !me || !activeConversationId) return;
+    const cid = activeConversationId;
     const clientId = clientRef.current?.send(cid, text) ?? String(Date.now());
     const tempId = `tmp-${clientId}`;
     const msg: ChatMessage = {
@@ -374,16 +476,14 @@ export default function ChatPage() {
   };
 
   const onTyping = (typing: boolean) => {
-    if (!activeId) return;
-    const cid = userToConv.current.get(activeId);
-    if (cid) clientRef.current?.setTyping(cid, typing);
+    if (!activeConversationId) return;
+    clientRef.current?.setTyping(activeConversationId, typing);
   };
 
   const messages = useMemo(() => {
-    if (!activeId) return [];
-    const cid = userToConv.current.get(activeId);
-    return cid ? (threads[cid] ?? []) : [];
-  }, [activeId, threads]);
+    if (!activeConversationId) return [];
+    return threads[activeConversationId] ?? [];
+  }, [activeConversationId, threads]);
 
   return (
     <>
@@ -398,6 +498,12 @@ export default function ChatPage() {
               setContactError(null);
               setShowAddContact(true);
             }}>＋</button>
+            <button className="icon-btn" aria-label="New group" title="New group" onClick={() => {
+              setGroupTitle('');
+              setGroupMembers(new Set());
+              setGroupError(null);
+              setShowNewGroup(true);
+            }}>👥</button>
             <button className="icon-btn" aria-label="Menu">⋮</button>
           </div>
           <ContactList
@@ -424,19 +530,26 @@ export default function ChatPage() {
             <>
               <div className="chat-head">
                 <button className="icon-btn" aria-label="Back" onClick={() => setActiveId(undefined)}>←</button>
-                <div className="avatar">{active.displayName[0]}</div>
+                <div className="avatar">{isGroupActive ? '👥' : active.displayName[0]}</div>
                 <div className="info">
                   <div className="name">{active.displayName}</div>
                   <div className="status">
-                    {peerTyping[active.id] ? 'typing…'
+                    {isGroupActive
+                      ? (groupMeta.current.get(activeId!.slice(2))?.members
+                          .map((m) => m.displayName).join(', ') || 'Group')
+                      : peerTyping[active.id] ? 'typing…'
                       : active.online ? 'online' : 'offline'}
                   </div>
                 </div>
                 <div className="actions">
-                  <button title="Voice call" aria-label="Voice call" onClick={() => startCall('voice')}>📞</button>
-                  <button title="Video call" aria-label="Video call" onClick={() => startCall('video')}>📹</button>
-                  <button title="Remote desktop" aria-label="Remote desktop"
-                          onClick={() => router.push('/remote')}>🖥️</button>
+                  {!isGroupActive && (
+                    <>
+                      <button title="Voice call" aria-label="Voice call" onClick={() => startCall('voice')}>📞</button>
+                      <button title="Video call" aria-label="Video call" onClick={() => startCall('video')}>📹</button>
+                      <button title="Remote desktop" aria-label="Remote desktop"
+                              onClick={() => router.push('/remote')}>🖥️</button>
+                    </>
+                  )}
                   <button title="Search">🔍</button>
                   <button title="Menu">⋮</button>
                 </div>
@@ -502,6 +615,55 @@ export default function ChatPage() {
                 disabled={contactBusy || contactDraft.displayName.trim().length < 2 || !EMAIL_RE.test(contactDraft.email.trim())}
               >
                 {contactBusy ? 'Sending…' : 'Add Contact'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {showNewGroup && (
+        <div className="wa-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="new-group-title">
+          <div className="wa-modal new-group-modal">
+            <button className="wa-modal-close" type="button" aria-label="Close" onClick={closeNewGroup}>×</button>
+            <h2 id="new-group-title">New Group</h2>
+            <p>Pick members to start a group chat. Group messages are end-to-end encrypted with the same key as 1:1 chats.</p>
+            <label className="wa-floating-field">
+              <input
+                value={groupTitle}
+                onChange={(e) => setGroupTitle(e.target.value)}
+                placeholder=" "
+                autoFocus
+                maxLength={80}
+              />
+              <span>Group Name</span>
+            </label>
+            <div className="group-member-picker">
+              {contacts.filter((c) => !c.id.startsWith('g:')).length === 0 && (
+                <div className="group-empty">No contacts yet. Add a contact first.</div>
+              )}
+              {contacts
+                .filter((c) => !c.id.startsWith('g:'))
+                .map((c) => (
+                  <label key={c.id} className={`group-member-row${groupMembers.has(c.id) ? ' selected' : ''}`}>
+                    <input
+                      type="checkbox"
+                      checked={groupMembers.has(c.id)}
+                      onChange={() => toggleGroupMember(c.id)}
+                    />
+                    <span className="group-member-avatar" aria-hidden>{c.displayName[0]?.toUpperCase()}</span>
+                    <span className="group-member-name">{c.displayName}</span>
+                  </label>
+                ))}
+            </div>
+            {groupError && <div className="wa-form-error">{groupError}</div>}
+            <div className="add-contact-actions">
+              <button type="button" className="add-contact-secondary" onClick={closeNewGroup} disabled={groupBusy}>Cancel</button>
+              <button
+                type="button"
+                className="wa-primary-btn add-contact-primary"
+                onClick={() => void submitNewGroup()}
+                disabled={groupBusy || groupTitle.trim().length < 2 || groupMembers.size < 1}
+              >
+                {groupBusy ? 'Creating…' : `Create${groupMembers.size > 0 ? ` (${groupMembers.size + 1})` : ''}`}
               </button>
             </div>
           </div>

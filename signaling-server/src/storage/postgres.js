@@ -316,6 +316,34 @@ export function createPostgresStorage() {
         }
       },
 
+      async createGroupConversation({ conversationId, creatorId, memberIds, title }) {
+        const ids = Array.from(new Set([String(creatorId), ...memberIds.map(String)]));
+        if (ids.length < 2) throw new Error('group_needs_members');
+        if (ids.length > 256) throw new Error('group_too_large');
+        const cleanTitle = String(title || '').trim().slice(0, 80) || null;
+        const client = await pool.connect();
+        try {
+          await client.query('BEGIN');
+          await client.query(
+            `INSERT INTO conversations (id, is_group, title, created_by) VALUES ($1, true, $2, $3)`,
+            [conversationId, cleanTitle, creatorId],
+          );
+          for (const userId of ids) {
+            await client.query(
+              `INSERT INTO conversation_members (conversation_id, user_id, role) VALUES ($1,$2,$3)`,
+              [conversationId, userId, userId === String(creatorId) ? 'admin' : 'member'],
+            );
+          }
+          await client.query('COMMIT');
+          return conversationId;
+        } catch (error) {
+          await client.query('ROLLBACK').catch(() => {});
+          throw error;
+        } finally {
+          client.release();
+        }
+      },
+
       async listConversations(userId) {
         const { rows } = await pool.query(
           `SELECT c.id, c.is_group, c.title, c.last_msg_at,
@@ -323,7 +351,8 @@ export function createPostgresStorage() {
                     WHERE m.conversation_id=c.id ORDER BY created_at DESC LIMIT 1) AS last_body,
                   (SELECT json_agg(json_build_object('id', u.id, 'displayName', u.display_name))
                      FROM conversation_members cm JOIN users u ON u.id=cm.user_id
-                    WHERE cm.conversation_id=c.id AND cm.user_id <> $1) AS members,
+                    WHERE cm.conversation_id=c.id
+                      AND (c.is_group = true OR cm.user_id <> $1)) AS members,
                   COALESCE((SELECT COUNT(*) FROM chat_messages_v2 m
                              LEFT JOIN message_receipts r ON r.message_id=m.id AND r.user_id=$1
                             WHERE m.conversation_id=c.id AND m.sender_id <> $1

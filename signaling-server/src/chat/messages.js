@@ -143,7 +143,34 @@ export function attachChatRoutes(app, requireAuth, storage = createStorage()) {
   });
 
   app.post('/api/conversations', requireAuth, async (req, res) => {
-    const { peerUserId } = req.body || {};
+    const { peerUserId, memberIds, title } = req.body || {};
+
+    // Group conversation: caller passes memberIds[]
+    if (Array.isArray(memberIds)) {
+      const cleanMembers = memberIds
+        .map((id) => String(id || '').trim())
+        .filter((id) => id && id !== req.user.id);
+      if (cleanMembers.length < 1) return res.status(400).json({ error: 'group_needs_members' });
+      try {
+        const id = await storage.chat.createGroupConversation({
+          conversationId: uid(),
+          creatorId: req.user.id,
+          memberIds: cleanMembers,
+          title,
+        });
+        for (const memberId of cleanMembers) {
+          await storage.users.markKnownContact?.({
+            userId: req.user.id,
+            contactUserId: memberId,
+            reason: 'group',
+          }).catch(() => {});
+        }
+        return res.json({ id, isGroup: true });
+      } catch (e) {
+        return res.status(400).json({ error: e.message });
+      }
+    }
+
     if (!peerUserId) return res.status(400).json({ error: 'peerUserId_required' });
     try {
       const id = await findOrCreate1to1(storage, req.user.id, peerUserId);
