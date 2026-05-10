@@ -12,6 +12,7 @@ export interface CallMediaConfig {
 export interface PeerInfo {
   id: string;
   name: string;
+  userId?: string | null;
   mic: boolean;
   cam: boolean;
   screen: boolean;
@@ -34,7 +35,7 @@ export interface ChatMessage {
 }
 
 export interface JoinResult {
-  self: { id: string; name: string };
+  self: { id: string; name: string; userId?: string | null };
   rtpCapabilities: unknown;
   peers: PeerInfo[];
   existingProducers: ExistingProducerInfo[];

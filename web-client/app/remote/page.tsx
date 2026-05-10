@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { AppShell } from '../../components/app/AppShell';
-import { api, loadStoredUser, registerUser, type StoredUser } from '../../lib/user-session';
+import { api, loadStoredUser, registerOrLoginUser, type StoredUser } from '../../lib/user-session';
 import { RemoteSessionView } from '../../components/remote/RemoteSessionView';
 
 interface AnnounceResponse {
@@ -55,11 +55,6 @@ function loadIdentity(): VisitorIdentity {
 function saveIdentity(identity: VisitorIdentity) {
   localStorage.setItem(IDENTITY_KEY, JSON.stringify(identity));
   localStorage.setItem('wa:name', identity.fullName);
-}
-
-function createUsername(email: string) {
-  const normalized = email.trim().toLowerCase().replace(/[^a-z0-9_.-]/g, '.').replace(/\.+/g, '.');
-  return normalized.replace(/^\.+|\.+$/g, '') || `guest.${Date.now().toString(36)}`;
 }
 
 function formatSessionId(value: string) {
@@ -130,9 +125,21 @@ function RemotePageInner() {
     const validation = validateIdentity(identity);
     if (validation) throw new Error(validation);
     saveIdentity({ fullName, email });
-    const user = await registerUser(`${createUsername(email)}.${Date.now().toString(36)}`, fullName);
+    const user = await registerOrLoginUser({ fullName, email });
     setMe(user);
     return user;
+  }
+
+  async function continueToRemoteSession() {
+    setErr(null);
+    setBusy(true);
+    try {
+      await ensureUser();
+    } catch (e) {
+      setErr((e as Error).message || 'Could not continue.');
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function createSession() {
@@ -277,8 +284,48 @@ function RemotePageInner() {
     </div>
   );
 
-  if (sessionId) {
+  if (sessionId && me) {
     return <RemoteSessionView sessionId={sessionId} />;
+  }
+
+  if (sessionId) {
+    return (
+      <AppShell title="Remote Desktop" subtitle="Secure support session" list={recentList}>
+        <div className="wa-hub">
+          <div className="wa-hub-head">
+            <span className="wa-kicker">Remote invite</span>
+            <h2>Confirm who is joining</h2>
+            <p>Enter your full name and email. If this email already exists, we will sign you back into that account.</p>
+          </div>
+          <section className="wa-waiting-room">
+            <div className="wa-session-code">{formatSessionId(sessionId)}</div>
+            <label className="wa-floating-field">
+              <input
+                value={identity.fullName}
+                onChange={(e) => setIdentity((current) => ({ ...current, fullName: e.target.value }))}
+                placeholder=" "
+                autoComplete="name"
+              />
+              <span>Your Full Name</span>
+            </label>
+            <label className="wa-floating-field">
+              <input
+                value={identity.email}
+                onChange={(e) => setIdentity((current) => ({ ...current, email: e.target.value }))}
+                placeholder=" "
+                type="email"
+                autoComplete="email"
+              />
+              <span>Email Address</span>
+            </label>
+            {err && <div className="wa-form-error">{err}</div>}
+            <button className="wa-primary-btn" onClick={() => { void continueToRemoteSession(); }} disabled={busy}>
+              {busy ? 'Checking…' : 'Join Support Session'}
+            </button>
+          </section>
+        </div>
+      </AppShell>
+    );
   }
 
   return (

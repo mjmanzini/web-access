@@ -127,9 +127,31 @@ export function attachChatRoutes(app, requireAuth, storage = createStorage()) {
     if (!peerUserId) return res.status(400).json({ error: 'peerUserId_required' });
     try {
       const id = await findOrCreate1to1(storage, req.user.id, peerUserId);
+      await storage.users.markKnownContact?.({ userId: req.user.id, contactUserId: peerUserId, reason: 'chat' }).catch(() => {});
       res.json({ id });
     } catch (e) {
       res.status(400).json({ error: e.message });
+    }
+  });
+
+  app.get('/api/contacts', requireAuth, async (req, res) => {
+    try {
+      const [knownContacts, conversations] = await Promise.all([
+        storage.users.listKnownContacts?.(req.user.id).catch(() => []) || [],
+        listConversations(storage, req.user.id).catch(() => []),
+      ]);
+      const byId = new Map();
+      for (const contact of knownContacts) byId.set(contact.id, contact);
+      for (const conversation of conversations) {
+        for (const member of conversation.members || []) {
+          if (member?.id && member.id !== req.user.id && !byId.has(member.id)) {
+            byId.set(member.id, { ...member, reason: 'chat', lastContactAt: conversation.last_msg_at });
+          }
+        }
+      }
+      res.json({ contacts: [...byId.values()] });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
     }
   });
 

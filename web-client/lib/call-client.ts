@@ -108,8 +108,8 @@ export class CallClient {
     this.socket.on('call:chat', ({ message }: { message: ChatMessage }) => this.emit('chat', message));
   }
 
-  async join(roomId: string, name: string) {
-    const result = await this.request<JoinResult & { ok: true }>('call:join', { roomId, name });
+  async join(roomId: string, name: string, token?: string) {
+    const result = await this.request<JoinResult & { ok: true }>('call:join', { roomId, name, token });
     this.self = result.self;
     for (const peer of result.peers) {
       this.peers.set(peer.id, peer);

@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { io, type Socket } from 'socket.io-client';
 import { sendEncoded, useVideoInput } from '../../lib/use-video-input';
 import type { ControlMessage, InputMode } from '../../lib/control-protocol';
-import { signalingUrl } from '../../lib/user-session';
+import { loadStoredUser, signalingUrl } from '../../lib/user-session';
 
 type Phase = 'connecting' | 'waiting-host' | 'connected' | 'error' | 'ended';
 
@@ -79,7 +79,7 @@ export function RemoteSessionView({ sessionId }: { sessionId: string }) {
       };
 
       socket.on('connect', () => {
-        socket.emit('join', { sessionId, role: 'client' }, (ack: { ok: boolean; error?: string }) => {
+        socket.emit('join', { sessionId, role: 'client', token: loadStoredUser()?.token }, (ack: { ok: boolean; error?: string }) => {
           if (!ack?.ok) {
             setPhase('error');
             setStatus(`Cannot join: ${ack?.error ?? 'unknown'}`);

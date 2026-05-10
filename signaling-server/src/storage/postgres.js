@@ -50,7 +50,54 @@ export function createPostgresStorage() {
 
       async listUsers() {
         const { rows } = await pool.query(
-          `SELECT id, username, display_name AS "displayName" FROM users ORDER BY display_name ASC`,
+          `SELECT DISTINCT ON (COALESCE(lower(email), lower(username), id))
+                  id, username, display_name AS "displayName", lower(email) AS "emailLower"
+             FROM users
+            ORDER BY COALESCE(lower(email), lower(username), id), display_name ASC`,
+        );
+        return rows;
+      },
+
+      async markKnownContact({ userId, contactUserId, reason }) {
+        if (!userId || !contactUserId || String(userId) === String(contactUserId)) return;
+        await pool.query(
+          `CREATE TABLE IF NOT EXISTS known_contacts (
+             user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+             contact_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+             reason TEXT,
+             created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+             updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+             PRIMARY KEY (user_id, contact_user_id)
+           )`,
+        );
+        await pool.query(
+          `INSERT INTO known_contacts (user_id, contact_user_id, reason)
+           VALUES ($1, $2, $3), ($2, $1, $3)
+           ON CONFLICT (user_id, contact_user_id)
+           DO UPDATE SET reason = EXCLUDED.reason, updated_at = now()`,
+          [userId, contactUserId, reason || 'known'],
+        );
+      },
+
+      async listKnownContacts(userId) {
+        await pool.query(
+          `CREATE TABLE IF NOT EXISTS known_contacts (
+             user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+             contact_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+             reason TEXT,
+             created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+             updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+             PRIMARY KEY (user_id, contact_user_id)
+           )`,
+        );
+        const { rows } = await pool.query(
+          `SELECT u.id, u.username, u.display_name AS "displayName",
+                  lower(u.email) AS "emailLower", kc.reason, kc.updated_at AS "lastContactAt"
+             FROM known_contacts kc
+             JOIN users u ON u.id = kc.contact_user_id
+            WHERE kc.user_id = $1
+            ORDER BY kc.updated_at DESC`,
+          [userId],
         );
         return rows;
       },

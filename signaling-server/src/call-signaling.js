@@ -37,6 +37,7 @@ import {
   saveChatMessage,
   logEvent,
 } from './db.js';
+import { createStorage } from './storage/index.js';
 
 const rooms = new RoomRegistry();
 const CHAT_HISTORY = 50;
@@ -54,7 +55,7 @@ function wrap(handler) {
   };
 }
 
-export function attachCallSignaling(io) {
+export function attachCallSignaling(io, users = null, storage = createStorage()) {
   io.on('connection', (socket) => {
     /** @type {{ roomId: string, peerId: string, participantRowId: number|null } | null} */
     let membership = null;
@@ -64,11 +65,19 @@ export function attachCallSignaling(io) {
       socket.to(`call:${membership.roomId}`).emit(ev, payload);
     }
 
-    socket.on('call:join', wrap(async ({ roomId, name }) => {
+    socket.on('call:join', wrap(async ({ roomId, name, token }) => {
       if (!roomId) throw new Error('roomId required');
       if (membership) throw new Error('already in a call');
+      const authedUser = token && users ? await users.loginByToken(token).catch(() => null) : null;
       const room = await rooms.getOrCreate(String(roomId));
-      const peer = await room.addPeer({ socketId: socket.id, name });
+      const peer = await room.addPeer({ socketId: socket.id, name: authedUser?.displayName || name, userId: authedUser?.id || null });
+      if (authedUser) {
+        for (const otherPeer of room.peers.values()) {
+          if (otherPeer.id !== peer.id && otherPeer.userId) {
+            storage.users.markKnownContact?.({ userId: authedUser.id, contactUserId: otherPeer.userId, reason: 'call' }).catch(() => {});
+          }
+        }
+      }
       await upsertCallRoom(room.id).catch(() => {});
       const participantRowId = await recordParticipantJoin(room.id, { peerId: peer.id, name: peer.name }).catch(() => null);
       membership = { roomId: room.id, peerId: peer.id, participantRowId };
@@ -76,11 +85,11 @@ export function attachCallSignaling(io) {
       logEvent('call_join', { roomId: room.id, payload: { peerId: peer.id, name: peer.name } });
 
       socket.to(`call:${room.id}`).emit('call:peer-joined', {
-        peer: { id: peer.id, name: peer.name, mic: peer.mic, cam: peer.cam, screen: peer.screen, joinedAt: peer.joinedAt },
+        peer: { id: peer.id, name: peer.name, userId: peer.userId || null, mic: peer.mic, cam: peer.cam, screen: peer.screen, joinedAt: peer.joinedAt },
       });
 
       return {
-        self: { id: peer.id, name: peer.name },
+        self: { id: peer.id, name: peer.name, userId: peer.userId || null },
         rtpCapabilities: null,
         peers: room.presence().filter((p) => p.id !== peer.id),
         existingProducers: [],

@@ -129,7 +129,7 @@ export function attachUserRoutes(app, users) {
 }
 
 /** @param {import('socket.io').Server} io @param {UserRegistry} users */
-export function attachUserSignaling(io, users) {
+export function attachUserSignaling(io, users, storage = createStorage()) {
   io.on('connection', (socket) => {
     /** @type {string|null} */
     let authedUserId = null;
@@ -153,6 +153,7 @@ export function attachUserSignaling(io, users) {
       const sockets = users.socketsOf(target.id);
       if (sockets.length === 0) { ack?.({ ok: false, error: 'user_offline' }); return; }
       const assignedRoom = String(roomId || '').trim() || `dm-${me.id}-${target.id}-${Date.now().toString(36)}`;
+      storage.users.markKnownContact?.({ userId: me.id, contactUserId: target.id, reason: 'call' }).catch(() => {});
       io.to(`user:${target.id}`).emit('user:incoming-call', {
         roomId: assignedRoom,
         from: me,

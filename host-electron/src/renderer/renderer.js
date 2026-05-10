@@ -415,7 +415,7 @@ async function connectSignaling(sessionId) {
   socket = io(config.signalingUrl, { transports: ['websocket'] });
   socket.on('connect', () => {
     setStatus(`signaling connected (id=${socket.id})`);
-    socket.emit('join', { sessionId, role: 'host' }, (ack) => {
+    socket.emit('join', { sessionId, role: 'host', token: hostTokenInput.value.trim() || savedToken() }, (ack) => {
       if (!ack?.ok) setStatus(`join failed: ${ack?.error}`);
       else setStatus('waiting for client to join…');
     });

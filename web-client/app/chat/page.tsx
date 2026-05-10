@@ -21,6 +21,19 @@ interface ConvSummary {
   unread: number;
 }
 
+interface KnownContact {
+  id: string;
+  username?: string;
+  displayName: string;
+  online?: boolean;
+  reason?: string;
+  lastContactAt?: string | null;
+}
+
+function contactKey(user: { id: string; username?: string; displayName: string }) {
+  return user.id || user.username || user.displayName.toLowerCase();
+}
+
 export default function ChatPage() {
   const router = useRouter();
   const [me, setMe] = useState<StoredUser | null>(null);
@@ -48,8 +61,11 @@ export default function ChatPage() {
     if (!me) return;
     let cancelled = false;
     (async () => {
-      const [users, conv] = await Promise.all([
+      const [users, known, conv] = await Promise.all([
         listUsers().catch(() => [] as PublicUser[]),
+        api<{ contacts: KnownContact[] }>('/api/contacts')
+          .then((r) => r.contacts)
+          .catch(() => [] as KnownContact[]),
         api<{ conversations: ConvSummary[] }>('/api/conversations')
           .then((r) => r.conversations)
           .catch(() => [] as ConvSummary[]),
@@ -63,8 +79,15 @@ export default function ChatPage() {
         convToUser.current.set(c.id, peer.id);
       }
 
-      const list: Contact[] = users
-        .filter((u) => u.id !== me.id)
+      const mergedUsers = new Map<string, KnownContact>();
+      for (const u of users) {
+        if (u.id !== me.id) mergedUsers.set(contactKey(u), u);
+      }
+      for (const u of known) {
+        if (u.id !== me.id) mergedUsers.set(contactKey(u), { ...(mergedUsers.get(contactKey(u)) || {}), ...u });
+      }
+
+      const list: Contact[] = [...mergedUsers.values()]
         .map((u) => {
           const cid = userToConv.current.get(u.id);
           const meta = cid ? conv.find((c) => c.id === cid) : null;
@@ -74,8 +97,8 @@ export default function ChatPage() {
             online: u.online,
             lastMessage: meta?.last_body
               ? (isEncryptedBody(meta.last_body) ? 'Encrypted message' : meta.last_body)
-              : undefined,
-            lastMessageAt: meta?.last_msg_at ?? undefined,
+              : u.reason ? `Known from ${u.reason}` : undefined,
+            lastMessageAt: meta?.last_msg_at ?? u.lastContactAt ?? undefined,
             unread: meta?.unread ?? 0,
           };
         })

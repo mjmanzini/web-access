@@ -124,6 +124,10 @@ function remoteIdCollection(db) {
   return db.collection('remoteIds');
 }
 
+function knownContactCollection(db) {
+  return db.collection('knownContacts');
+}
+
 function mapUserDoc(doc) {
   if (!doc?.exists) return null;
   const data = doc.data() || {};
@@ -131,6 +135,7 @@ function mapUserDoc(doc) {
     id: doc.id,
     username: data.username || null,
     displayName: data.displayName || data.username || null,
+    emailLower: data.emailLower || null,
   };
 }
 
@@ -160,6 +165,10 @@ function oneToOneConversationKey(meId, peerId) {
 
 function messageReceiptId(messageId, userId) {
   return `${String(messageId)}:${String(userId)}`;
+}
+
+function knownContactId(userId, contactUserId) {
+  return `${String(userId)}:${String(contactUserId)}`;
 }
 
 function mapWebauthnCredentialDoc(doc) {
@@ -311,10 +320,48 @@ export function createFirebaseStorage() {
   async function listUsers() {
     const { db } = getFirebaseContext();
     const snap = await userCollection(db).get();
+    const seen = new Set();
     return snap.docs
       .map(mapUserDoc)
       .filter(Boolean)
+      .filter((user) => {
+        const key = user.emailLower || user.username || user.id;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
       .sort((left, right) => String(left.displayName || '').localeCompare(String(right.displayName || '')));
+  }
+
+  async function markKnownContact({ userId, contactUserId, reason }) {
+    if (!userId || !contactUserId || String(userId) === String(contactUserId)) return;
+    const { db } = getFirebaseContext();
+    const now = nowTimestamp();
+    const payload = { reason: reason || 'known', updatedAt: now };
+    await Promise.all([
+      knownContactCollection(db).doc(knownContactId(userId, contactUserId)).set({
+        userId: String(userId), contactUserId: String(contactUserId), createdAt: now, ...payload,
+      }, { merge: true }),
+      knownContactCollection(db).doc(knownContactId(contactUserId, userId)).set({
+        userId: String(contactUserId), contactUserId: String(userId), createdAt: now, ...payload,
+      }, { merge: true }),
+    ]);
+  }
+
+  async function listKnownContacts(userId) {
+    const { db } = getFirebaseContext();
+    const snap = await knownContactCollection(db).where('userId', '==', String(userId)).get();
+    const rows = await Promise.all(snap.docs.map(async (doc) => {
+      const data = doc.data() || {};
+      const user = await getUserById(db, data.contactUserId);
+      if (!user) return null;
+      return {
+        ...user,
+        reason: data.reason || 'known',
+        lastContactAt: coerceDate(data.updatedAt || data.createdAt),
+      };
+    }));
+    return rows.filter(Boolean).sort((left, right) => compareDescDates(left.lastContactAt, right.lastContactAt));
   }
 
   async function issueSessionToken({ userId, tokenHash, ttlSeconds }) {
@@ -895,6 +942,8 @@ export function createFirebaseStorage() {
       touchSessionToken,
       findUserById,
       listUsers,
+      markKnownContact,
+      listKnownContacts,
     },
 
     auth: {

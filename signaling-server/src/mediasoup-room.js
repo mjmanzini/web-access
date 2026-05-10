@@ -9,7 +9,7 @@
 import { randomUUID } from 'node:crypto';
 import { getWorker, ROUTER_MEDIA_CODECS, WEBRTC_TRANSPORT_OPTIONS } from './mediasoup-worker.js';
 
-/** @typedef {{ id: string, name: string, socketId: string, joinedAt: number,
+/** @typedef {{ id: string, name: string, userId: string|null, socketId: string, joinedAt: number,
  *             mic: boolean, cam: boolean, screen: boolean,
  *             transports: Map<string, any>, producers: Map<string, any>,
  *             consumers: Map<string, any> }} Peer */
@@ -33,10 +33,11 @@ export class CallRoom {
     return this._router;
   }
 
-  async addPeer({ socketId, name }) {
+  async addPeer({ socketId, name, userId = null }) {
     const peer = {
       id: randomUUID(),
       name: String(name || 'Guest').slice(0, 40),
+      userId: userId ? String(userId) : null,
       socketId,
       joinedAt: Date.now(),
       mic: true,
@@ -60,6 +61,7 @@ export class CallRoom {
     return Array.from(this.peers.values()).map((p) => ({
       id: p.id,
       name: p.name,
+      userId: p.userId || null,
       mic: p.mic,
       cam: p.cam,
       screen: p.screen,

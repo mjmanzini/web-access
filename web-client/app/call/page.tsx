@@ -6,6 +6,7 @@ import { io, type Socket } from 'socket.io-client';
 import { AppShell } from '../../components/app/AppShell';
 import { CallClient, type RemoteTrack } from '../../lib/call-client';
 import type { ChatMessage, PeerInfo } from '../../lib/call-protocol';
+import { loadStoredUser, registerOrLoginUser, type StoredUser } from '../../lib/user-session';
 
 function defaultSignalingUrl(): string {
   if (typeof window !== 'undefined') {
@@ -85,6 +86,7 @@ function CallInner() {
   const [cameraFacing, setCameraFacing] = useState<'user' | 'environment'>('user');
   const [screen, setScreen] = useState(false);
   const [incoming, setIncoming] = useState<{ roomId: string; fromPeer: string | null } | null>(null);
+  const [, setMe] = useState<StoredUser | null>(null);
 
   const clientRef = useRef<CallClient | null>(null);
   const socketRef = useRef<Socket | null>(null);
@@ -99,9 +101,15 @@ function CallInner() {
     const saved = loadIdentity();
     if (saved.fullName) setName(saved.fullName);
     if (saved.email) setEmail(saved.email);
+    setMe(loadStoredUser());
   }, []);
 
   useEffect(() => {
+    const directRoom = (params.get('room') || params.get('code') || '').trim().toUpperCase();
+    if (directRoom) {
+      setRoomId(directRoom);
+      setModal('join');
+    }
     const waiting = params.get('waitingRoom')?.trim().toUpperCase();
     if (waiting) {
       setRoomId(waiting);
@@ -136,19 +144,28 @@ function CallInner() {
     setPhase('idle');
   }, []);
 
-  function ensureIdentity() {
+  async function ensureIdentity() {
     const fullName = name.trim();
     const address = email.trim().toLowerCase();
     const validation = validateNameEmail(fullName, address);
     if (validation) throw new Error(validation);
     saveIdentity(fullName, address);
+    const current = loadStoredUser();
+    if (current) {
+      setMe(current);
+      return current;
+    }
+    const user = await registerOrLoginUser({ fullName, email: address });
+    setMe(user);
+    return user;
   }
 
   async function join(nextRoomId = roomId) {
     if (!nextRoomId) { setStatus('Enter a session code'); return; }
     setPhase('joining');
     setStatus('Connecting…');
-    const displayName = name.trim() || 'Guest';
+    const user = await ensureIdentity();
+    const displayName = user.displayName || name.trim() || 'Guest';
     localStorage.setItem('wa:name', displayName);
     try {
       const socket = io(SIGNALING_URL, { transports: ['websocket'] });
@@ -178,7 +195,7 @@ function CallInner() {
         if (p.fromPeer && p.fromPeer !== selfIdRef.current) setIncoming({ roomId: p.roomId, fromPeer: p.fromPeer });
       });
 
-      const joined = await client.join(nextRoomId, displayName);
+      const joined = await client.join(nextRoomId, displayName, user.token);
       selfIdRef.current = joined.self.id;
       setPeers(joined.peers);
       setChat(joined.chat);
@@ -305,7 +322,7 @@ function CallInner() {
   async function connectFromModal() {
     setStatus('');
     try {
-      ensureIdentity();
+      await ensureIdentity();
       const targetRoom = roomId.trim().toUpperCase();
       const validation = validateRoomId(targetRoom);
       if (validation) throw new Error(validation);
@@ -317,10 +334,10 @@ function CallInner() {
     }
   }
 
-  function createWaitingRoom() {
+  async function createWaitingRoom() {
     setStatus('');
     try {
-      ensureIdentity();
+      await ensureIdentity();
       const generated = generateRoomId();
       setRoomId(generated);
       setWaitingRoomId(generated);

@@ -10,6 +10,19 @@
 import crypto from 'node:crypto';
 import { createStorage } from '../storage/index.js';
 
+function sha256(buf) { return crypto.createHash('sha256').update(buf).digest(); }
+
+async function issueSession(storage, user) {
+  const raw = crypto.randomBytes(32);
+  const token = raw.toString('base64url');
+  await storage.auth.issueSessionToken({
+    userId: user.id,
+    tokenHash: sha256(raw),
+    ttlSeconds: 60 * 60 * 24 * 365,
+  });
+  return { ...user, token };
+}
+
 function deriveUsername({ username, email, phone, displayName }) {
   if (username) return username;
   if (email) return email.split('@')[0];
@@ -35,6 +48,18 @@ export function attachAuthRoutes(app, users, storage = createStorage()) {
     }
 
     let uname = deriveUsername({ username, email, phone, displayName });
+
+    if (email) {
+      const existing = await storage.auth.findUserByEmail(email).catch(() => null);
+      if (existing) {
+        await storage.auth.updateUserContact({
+          userId: existing.id,
+          email,
+          phone: phone || null,
+        }).catch(() => {});
+        return res.json(await issueSession(storage, existing));
+      }
+    }
 
     // Try to register; on collision, append a short suffix and retry up to 5x.
     for (let attempt = 0; attempt < 5; attempt++) {

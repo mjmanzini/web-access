@@ -13,12 +13,12 @@
  *   5. Server notifies host ("peer-joined"), host creates RTCPeerConnection offer.
  *   6. "signal" messages ({ sdp } or { candidate }) are relayed host <-> client.
  */
-export function attachSignaling(io, pairing) {
+export function attachSignaling(io, pairing, users = null, storage = null) {
   io.on('connection', (socket) => {
     let joinedSessionId = null;
     let role = null;
 
-    socket.on('join', ({ sessionId, role: requestedRole } = {}, ack) => {
+    socket.on('join', async ({ sessionId, role: requestedRole, token } = {}, ack) => {
       const session = pairing.getSession(sessionId);
       if (!session) {
         ack?.({ ok: false, error: 'unknown_session' });
@@ -43,6 +43,19 @@ export function attachSignaling(io, pairing) {
 
       if (role === 'host') pairing.attachHost(sessionId, socket.id);
       else pairing.attachClient(sessionId, socket.id);
+
+      const authedUser = token && users ? await users.loginByToken(token).catch(() => null) : null;
+      if (authedUser) {
+        if (role === 'host') session.hostUserId = authedUser.id;
+        else session.clientUserId = authedUser.id;
+        if (session.hostUserId && session.clientUserId) {
+          storage?.users?.markKnownContact?.({
+            userId: session.hostUserId,
+            contactUserId: session.clientUserId,
+            reason: 'remote',
+          }).catch(() => {});
+        }
+      }
 
       ack?.({ ok: true });
       // Tell the *other* side that a peer is present so it can kick off SDP.

@@ -111,9 +111,9 @@ const io = new SocketIOServer(server, {
 
 attachPresenceBroadcast(io, users);
 attachChatSignaling(io, users);
-attachSignaling(io, pairing);
-attachCallSignaling(io);
-attachUserSignaling(io, users);
+attachSignaling(io, pairing, users, storage);
+attachCallSignaling(io, users, storage);
+attachUserSignaling(io, users, storage);
 
 if (USE_POSTGRES) {
   await initDb().catch((e) => {

@@ -71,6 +71,33 @@ export async function registerUser(username: string, displayName: string): Promi
   return u;
 }
 
+export async function registerOrLoginUser({
+  fullName,
+  email,
+  phone,
+}: {
+  fullName: string;
+  email?: string;
+  phone?: string;
+}): Promise<StoredUser> {
+  const res = await fetch(`${signalingUrl()}/api/auth/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      displayName: fullName.trim(),
+      email: email?.trim().toLowerCase() || undefined,
+      phone: phone?.trim() || undefined,
+    }),
+  });
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(err.error || `register_failed_${res.status}`);
+  }
+  const user = (await res.json()) as StoredUser;
+  saveStoredUser(user);
+  return user;
+}
+
 export async function verifyToken(token: string): Promise<{ id: string; username: string; displayName: string } | null> {
   try {
     const res = await fetch(`${signalingUrl()}/users/login`, {
