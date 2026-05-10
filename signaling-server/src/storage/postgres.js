@@ -12,7 +12,7 @@ export function createPostgresStorage() {
 
       async findUserByLegacyToken(token) {
         const { rows } = await pool.query(
-          `SELECT id, username, display_name AS "displayName" FROM users WHERE token = $1`,
+          `SELECT id, username, display_name AS "displayName", avatar_url AS "avatarUrl" FROM users WHERE token = $1`,
           [token],
         );
         return rows[0] || null;
@@ -20,7 +20,7 @@ export function createPostgresStorage() {
 
       async findUserBySessionTokenHash(tokenHash) {
         const { rows } = await pool.query(
-          `SELECT u.id, u.username, u.display_name AS "displayName"
+          `SELECT u.id, u.username, u.display_name AS "displayName", u.avatar_url AS "avatarUrl"
              FROM auth_credentials ac
              JOIN users u ON u.id = ac.user_id
             WHERE ac.credential_type = 'session'
@@ -42,7 +42,7 @@ export function createPostgresStorage() {
 
       async findUserById(id) {
         const { rows } = await pool.query(
-          `SELECT id, username, display_name AS "displayName" FROM users WHERE id = $1`,
+          `SELECT id, username, display_name AS "displayName", avatar_url AS "avatarUrl" FROM users WHERE id = $1`,
           [id],
         );
         return rows[0] || null;
@@ -51,7 +51,7 @@ export function createPostgresStorage() {
       async listUsers() {
         const { rows } = await pool.query(
           `SELECT DISTINCT ON (COALESCE(lower(email), lower(username), id))
-                  id, username, display_name AS "displayName", lower(email) AS "emailLower"
+                  id, username, display_name AS "displayName", lower(email) AS "emailLower", avatar_url AS "avatarUrl"
              FROM users
             ORDER BY COALESCE(lower(email), lower(username), id), display_name ASC`,
         );
@@ -92,7 +92,8 @@ export function createPostgresStorage() {
         );
         const { rows } = await pool.query(
           `SELECT u.id, u.username, u.display_name AS "displayName",
-                  lower(u.email) AS "emailLower", kc.reason, kc.updated_at AS "lastContactAt"
+                  lower(u.email) AS "emailLower", u.avatar_url AS "avatarUrl",
+                  kc.reason, kc.updated_at AS "lastContactAt"
              FROM known_contacts kc
              JOIN users u ON u.id = kc.contact_user_id
             WHERE kc.user_id = $1
@@ -100,6 +101,17 @@ export function createPostgresStorage() {
           [userId],
         );
         return rows;
+      },
+
+      async setUserAvatar({ userId, avatarUrl }) {
+        if (!userId) throw new Error('user_required');
+        await pool.query(
+          `ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT`,
+        );
+        await pool.query(
+          `UPDATE users SET avatar_url = $2 WHERE id = $1`,
+          [String(userId), avatarUrl == null ? null : String(avatarUrl)],
+        );
       },
     },
 

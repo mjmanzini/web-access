@@ -787,6 +787,94 @@
 }
 .chat-head .actions button:hover { background: rgba(134,150,160,.15); color: var(--wa-text); }
 
+/* ----- Avatar image (covers contact rows, chat-head, topbar) ----- */
+.avatar-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+  display: block;
+}
+.chat-head .avatar { position: relative; overflow: hidden; }
+.contact-row .avatar { overflow: hidden; }
+.side-head .me { position: relative; overflow: hidden; }
+
+/* ----- Top-bar profile chip ----- */
+.topbar-me {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px 4px 4px;
+  border-radius: 999px;
+  text-decoration: none;
+  color: var(--wa-text);
+  background: transparent;
+  transition: background .12s;
+}
+.topbar-me:hover { background: rgba(134,150,160,.16); }
+.topbar-avatar {
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  object-fit: cover;
+  display: grid; place-items: center;
+  background: linear-gradient(135deg, #6a7c8c, #44525e);
+  color: #fff; font-weight: 600; font-size: 13px;
+}
+.topbar-avatar-fallback { font-size: 13px; }
+.topbar-name {
+  font-size: 13px;
+  color: var(--wa-muted);
+  max-width: 140px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@media (max-width: 540px) {
+  .topbar-name { display: none; }
+}
+
+/* ----- Settings: avatar uploader ----- */
+.profile-avatar-row {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+.profile-avatar {
+  position: relative;
+  width: 96px; height: 96px;
+  border-radius: 50%;
+  overflow: hidden;
+  background: linear-gradient(135deg, #6a7c8c, #44525e);
+  color: #fff;
+  display: grid; place-items: center;
+  font-weight: 600; font-size: 30px;
+  flex-shrink: 0;
+  border: 2px solid var(--wa-border);
+}
+.profile-avatar img {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  object-fit: cover;
+}
+.profile-avatar-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.profile-avatar-actions .row { display: flex; gap: 8px; flex-wrap: wrap; }
+.profile-avatar-hint {
+  font-size: 12px;
+  color: var(--wa-muted);
+  margin: 0;
+}
+.profile-avatar-error {
+  font-size: 12px;
+  color: var(--wa-danger, #e23d3d);
+}
+
 .call-banner {
   display: flex;
   align-items: center;

@@ -9,6 +9,7 @@ export interface Contact {
   lastMessageAt?: string;
   unread?: number;
   online?: boolean;
+  avatarUrl?: string | null;
 }
 
 function initials(name: string) {
@@ -58,7 +59,9 @@ export function ContactList({
             onClick={() => onSelect(c.id)}
           >
             <div className="avatar" aria-hidden>
-              {initials(c.displayName)}
+              {c.avatarUrl
+                ? <img src={c.avatarUrl} alt="" className="avatar-img" />
+                : initials(c.displayName)}
               <span className={`presence-dot${c.online ? ' online' : ''}`} />
             </div>
             <div className="meta">

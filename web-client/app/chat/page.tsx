@@ -32,6 +32,7 @@ interface KnownContact {
   online?: boolean;
   reason?: string;
   lastContactAt?: string | null;
+  avatarUrl?: string | null;
 }
 
 interface IncomingInvite {
@@ -141,6 +142,7 @@ export default function ChatPage() {
             id: u.id,
             displayName: u.displayName,
             online: u.online,
+            avatarUrl: u.avatarUrl ?? null,
             lastMessage: meta?.last_body
               ? (isEncryptedBody(meta.last_body) ? 'Encrypted message' : meta.last_body)
               : u.reason ? `Known from ${u.reason}` : undefined,
@@ -491,7 +493,11 @@ export default function ChatPage() {
       <div className={`app-shell${activeId ? ' has-active' : ''}`}>
         <aside>
           <div className="side-head">
-            <div className="me" aria-hidden>{me?.displayName?.[0]?.toUpperCase() ?? '?'}</div>
+            <div className="me" aria-hidden>
+              {me?.avatarUrl
+                ? <img src={me.avatarUrl} alt="" className="avatar-img" />
+                : (me?.displayName?.[0]?.toUpperCase() ?? '?')}
+            </div>
             <div className="grow" />
             <button className="icon-btn" aria-label="New chat" onClick={() => {
               setContactDraft({ displayName: '', email: '' });
@@ -530,7 +536,13 @@ export default function ChatPage() {
             <>
               <div className="chat-head">
                 <button className="icon-btn" aria-label="Back" onClick={() => setActiveId(undefined)}>←</button>
-                <div className="avatar">{isGroupActive ? '👥' : active.displayName[0]}</div>
+                <div className="avatar">
+                  {isGroupActive
+                    ? '👥'
+                    : active.avatarUrl
+                      ? <img src={active.avatarUrl} alt="" className="avatar-img" />
+                      : active.displayName[0]}
+                </div>
                 <div className="info">
                   <div className="name">{active.displayName}</div>
                   <div className="status">

@@ -36,7 +36,7 @@ let dbReady = !USE_POSTGRES;
 
 const app = express();
 app.use(cors({ origin: CORS_ORIGIN }));
-app.use(express.json());
+app.use(express.json({ limit: '2mb' }));
 
 const pairing = new PairingRegistry();
 const users = new UserRegistry();

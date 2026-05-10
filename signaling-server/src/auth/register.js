@@ -88,4 +88,35 @@ export function attachAuthRoutes(app, users, storage = createStorage()) {
     if (!req.user) return res.status(401).json({ error: 'unauthenticated' });
     res.json({ user: req.user });
   });
+
+  // Profile avatar — accepts a small `data:image/...;base64,...` URL.
+  app.post('/api/me/avatar', async (req, res) => {
+    if (!req.user) return res.status(401).json({ error: 'unauthenticated' });
+    const raw = (req.body && (req.body.avatarUrl ?? req.body.dataUrl)) ?? null;
+    if (raw !== null && typeof raw !== 'string') {
+      return res.status(400).json({ error: 'invalid_avatar' });
+    }
+    if (raw && raw.length > 0) {
+      if (!/^data:image\/(png|jpe?g|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(raw)) {
+        return res.status(400).json({ error: 'invalid_avatar_format' });
+      }
+      // Cap ~200 KB raw bytes (≈ 270 KB base64 string).
+      if (raw.length > 280 * 1024) {
+        return res.status(413).json({ error: 'avatar_too_large' });
+      }
+    }
+    try {
+      if (typeof storage.users.setUserAvatar !== 'function') {
+        return res.status(501).json({ error: 'avatar_not_supported' });
+      }
+      await storage.users.setUserAvatar({
+        userId: req.user.id,
+        avatarUrl: raw && raw.length > 0 ? raw : null,
+      });
+      const fresh = await storage.users.findUserById(req.user.id);
+      res.json({ user: fresh });
+    } catch (e) {
+      res.status(500).json({ error: e.message || 'avatar_failed' });
+    }
+  });
 }

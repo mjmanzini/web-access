@@ -136,6 +136,7 @@ function mapUserDoc(doc) {
     username: data.username || null,
     displayName: data.displayName || data.username || null,
     emailLower: data.emailLower || null,
+    avatarUrl: data.avatarUrl || null,
   };
 }
 
@@ -346,6 +347,15 @@ export function createFirebaseStorage() {
         userId: String(contactUserId), contactUserId: String(userId), createdAt: now, ...payload,
       }, { merge: true }),
     ]);
+  }
+
+  async function setUserAvatar({ userId, avatarUrl }) {
+    if (!userId) throw new Error('user_required');
+    const { db } = getFirebaseContext();
+    await userCollection(db).doc(String(userId)).set({
+      avatarUrl: avatarUrl == null ? null : String(avatarUrl),
+      avatarUpdatedAt: nowTimestamp(),
+    }, { merge: true });
   }
 
   async function listKnownContacts(userId) {
@@ -978,6 +988,7 @@ export function createFirebaseStorage() {
       listUsers,
       markKnownContact,
       listKnownContacts,
+      setUserAvatar,
     },
 
     auth: {

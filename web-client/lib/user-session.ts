@@ -14,12 +14,14 @@ export interface StoredUser {
   username: string;
   displayName: string;
   token: string;
+  avatarUrl?: string | null;
 }
 export interface PublicUser {
   id: string;
   username: string;
   displayName: string;
   online: boolean;
+  avatarUrl?: string | null;
 }
 
 const STORAGE_KEY = 'web-access.user';

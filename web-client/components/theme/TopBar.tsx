@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { ThemeToggle } from './ThemeProvider';
 
-export function TopBar({ user }: { user?: { displayName: string } }) {
+export function TopBar({ user }: { user?: { displayName: string; avatarUrl?: string | null } }) {
   const path = usePathname() ?? '';
   const tab = (href: string, label: string) => (
     <Link href={href} className={path.startsWith(href) ? 'active' : ''}>{label}</Link>
@@ -17,7 +17,14 @@ export function TopBar({ user }: { user?: { displayName: string } }) {
         {tab('/remote', 'Remote')}
       </nav>
       <div className="grow" />
-      {user && <span style={{ color: 'var(--wa-muted)', fontSize: 13 }}>{user.displayName}</span>}
+      {user && (
+        <Link href="/settings" className="topbar-me" aria-label="Profile" title="Profile & settings">
+          {user.avatarUrl
+            ? <img src={user.avatarUrl} alt="" className="topbar-avatar" />
+            : <span className="topbar-avatar topbar-avatar-fallback">{user.displayName?.[0]?.toUpperCase() ?? '?'}</span>}
+          <span className="topbar-name">{user.displayName}</span>
+        </Link>
+      )}
       <ThemeToggle />
     </div>
   );
