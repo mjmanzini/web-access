@@ -7,7 +7,7 @@ runConfig:
 
 env:
   - variable: NEXT_PUBLIC_SIGNALING_URL
-    value: https://signal.example.com
+    value: https://web-access-signaling-603042970508.us-central1.run.app
     availability:
       - BUILD
       - RUNTIME

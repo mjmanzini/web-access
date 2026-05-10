@@ -18,6 +18,18 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $signalDir = Join-Path $repoRoot 'signaling-server'
 $dockerfile = Join-Path $repoRoot 'infra/signaling.Dockerfile'
 $imageTag = "gcr.io/$ProjectId/$ImageName"
+$cloudBuildConfig = Join-Path $repoRoot '.firebase-signaling.cloudbuild.yaml'
+
+$gcloudCommand = Get-Command gcloud -ErrorAction SilentlyContinue
+if ($gcloudCommand) {
+  $gcloud = $gcloudCommand.Source
+} else {
+  $fallbackGcloud = Join-Path $env:LocalAppData 'Google\Cloud SDK\google-cloud-sdk\bin\gcloud.cmd'
+  if (-not (Test-Path $fallbackGcloud)) {
+    throw 'gcloud was not found on PATH or at the default LocalAppData install location.'
+  }
+  $gcloud = $fallbackGcloud
+}
 
 $envArgs = @(
   "STORAGE_BACKEND=$StorageBackend"
@@ -49,7 +61,28 @@ if ($SetEnv) {
 }
 
 Write-Host "[firebase] building signaling image $imageTag" -ForegroundColor Cyan
-gcloud builds submit $signalDir --tag $imageTag --file $dockerfile --project $ProjectId
+@"
+steps:
+  - name: gcr.io/cloud-builders/docker
+    dir: signaling-server
+    args:
+      - build
+      - -f
+      - ../infra/signaling.Dockerfile
+      - -t
+      - $imageTag
+      - .
+images:
+  - $imageTag
+"@ | Set-Content -Path $cloudBuildConfig -Encoding ascii
+
+try {
+  & $gcloud builds submit $repoRoot --config $cloudBuildConfig --project $ProjectId
+} finally {
+  if (Test-Path $cloudBuildConfig) {
+    Remove-Item $cloudBuildConfig -Force
+  }
+}
 if ($LASTEXITCODE -ne 0) {
   throw 'Cloud Build failed.'
 }
@@ -72,7 +105,7 @@ if ($SetSecrets.Count -gt 0) {
 }
 
 Write-Host "[firebase] deploying Cloud Run service $ServiceName in $Region" -ForegroundColor Cyan
-& gcloud @deployArgs
+& $gcloud @deployArgs
 if ($LASTEXITCODE -ne 0) {
   throw 'Cloud Run deploy failed.'
 }

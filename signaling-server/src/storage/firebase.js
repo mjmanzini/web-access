@@ -31,8 +31,8 @@ function describeFirebaseConfig(config) {
 
 function buildMissingConfigError(config) {
   return new Error(
-    'Firebase storage requires either GOOGLE_APPLICATION_CREDENTIALS or all of ' +
-      'FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY.' +
+    'Firebase storage requires FIREBASE_PROJECT_ID plus either application default credentials, ' +
+      'GOOGLE_APPLICATION_CREDENTIALS, or all of FIREBASE_CLIENT_EMAIL and FIREBASE_PRIVATE_KEY.' +
       ` Current config: ${describeFirebaseConfig(config) || 'none'}`,
   );
 }
@@ -185,7 +185,7 @@ async function getUserById(db, id) {
 function initializeFirebaseContext() {
   const config = readFirebaseConfig();
   const hasInlineCredential = Boolean(config.projectId && config.clientEmail && config.privateKey);
-  const canUseApplicationDefault = Boolean(config.credentialsPath);
+  const canUseApplicationDefault = Boolean(config.projectId);
 
   if (!hasInlineCredential && !canUseApplicationDefault) {
     throw buildMissingConfigError(config);
