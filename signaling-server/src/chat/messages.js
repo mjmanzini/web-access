@@ -173,8 +173,13 @@ export function attachChatSignaling(io, users, storage = createStorage()) {
 
   nsp.on('connection', (socket) => {
     const me = socket.data.user;
+    users.attachSocket(me.id, socket.id);
     socket.join(`user:${me.id}`);
     logEvent('chat_connected', { userId: me.id });
+
+    socket.on('disconnect', () => {
+      users.detachSocket(me.id, socket.id);
+    });
 
     socket.on('send', async ({ conversationId, body, clientId } = {}, ack) => {
       try {

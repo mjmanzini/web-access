@@ -24,9 +24,10 @@ function formatTime(iso?: string) {
 }
 
 export function ContactList({
-  contacts, activeId, onSelect, query, onQuery,
+  contacts, typingById, activeId, onSelect, query, onQuery,
 }: {
   contacts: Contact[];
+  typingById?: Record<string, boolean>;
   activeId?: string;
   onSelect: (id: string) => void;
   query: string;
@@ -62,7 +63,9 @@ export function ContactList({
             </div>
             <div className="meta">
               <div className="name">{c.displayName}</div>
-              <div className="preview">{c.lastMessage ?? 'Tap to start chatting'}</div>
+              <div className={`preview${typingById?.[c.id] ? ' typing' : ''}`}>
+                {typingById?.[c.id] ? 'typing...' : c.lastMessage ?? 'Tap to start chatting'}
+              </div>
             </div>
             <div className="right">
               <div className="time">{formatTime(c.lastMessageAt)}</div>

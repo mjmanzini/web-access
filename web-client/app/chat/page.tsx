@@ -1,14 +1,15 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { io, type Socket } from 'socket.io-client';
 import { TopBar } from '../../components/theme/TopBar';
 import { ContactList, type Contact } from '../../components/chat/ContactList';
 import { MessageList } from '../../components/chat/MessageList';
 import { Composer } from '../../components/chat/Composer';
 import { ChatClient, decryptChatMessage, isEncryptedBody, type ChatMessage } from '../../lib/chat-client';
 import {
-  api, listUsers, loadStoredUser, signalingUrl, type StoredUser, type PublicUser,
+  api, clearStoredUser, listUsers, loadStoredUser, signalingUrl, verifyToken, type StoredUser, type PublicUser,
 } from '../../lib/user-session';
 
 interface ConvSummary {
@@ -30,6 +31,11 @@ interface KnownContact {
   lastContactAt?: string | null;
 }
 
+interface IncomingInvite {
+  roomId: string;
+  from: { id: string; username: string; displayName: string };
+}
+
 function contactKey(user: { id: string; username?: string; displayName: string }) {
   return user.id || user.username || user.displayName.toLowerCase();
 }
@@ -42,7 +48,11 @@ export default function ChatPage() {
   const [query, setQuery] = useState('');
   const [threads, setThreads] = useState<Record<string, ChatMessage[]>>({});
   const [peerTyping, setPeerTyping] = useState<Record<string, boolean>>({});
+  const [invite, setInvite] = useState<IncomingInvite | null>(null);
+  const [ringing, setRinging] = useState<{ toUserId: string; roomId: string } | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const clientRef = useRef<ChatClient | null>(null);
+  const socketRef = useRef<Socket | null>(null);
   // Map peerUserId <-> conversationId for 1:1 chats so the contact list
   // can be keyed by user while the server uses conversation IDs.
   const userToConv = useRef<Map<string, string>>(new Map());
@@ -53,7 +63,15 @@ export default function ChatPage() {
   useEffect(() => {
     const u = loadStoredUser();
     if (!u) { router.replace('/onboarding'); return; }
-    setMe(u);
+    void (async () => {
+      const ok = await verifyToken(u.token);
+      if (!ok) {
+        clearStoredUser();
+        router.replace('/onboarding');
+        return;
+      }
+      setMe(u);
+    })();
   }, [router]);
 
   // Load contact directory + my conversations
@@ -170,7 +188,32 @@ export default function ChatPage() {
     return () => { offMsg(); offRcpt(); offTyping(); offPresence(); cc.disconnect(); };
   }, [me]);
 
+  useEffect(() => {
+    if (!me) return;
+    const socket = io(signalingUrl(), { transports: ['websocket', 'polling'] });
+    socketRef.current = socket;
+    socket.emit('user:hello', { token: me.token }, (res: { ok: boolean }) => {
+      if (!res?.ok) setNotice('Could not connect calling.');
+    });
+    socket.on('user:presence', ({ userId, online }: { userId: string; online: boolean }) => {
+      setContacts((prev) => prev.map((c) => c.id === userId ? { ...c, online } : c));
+    });
+    socket.on('user:incoming-call', (payload: IncomingInvite) => {
+      setInvite(payload);
+      setNotice(null);
+    });
+    socket.on('user:call-answered', ({ roomId, accepted, fromUserId }: { roomId: string; accepted: boolean; fromUserId: string }) => {
+      setRinging((cur) => (cur && cur.toUserId === fromUserId ? null : cur));
+      if (accepted) window.location.href = `/call?room=${encodeURIComponent(roomId)}`;
+      else setNotice('Call was declined.');
+    });
+    socket.on('user:call-cancelled', () => setInvite(null));
+    return () => { socket.close(); socketRef.current = null; };
+  }, [me]);
+
   useEffect(() => { activeIdRef.current = activeId; }, [activeId]);
+
+  const active = useMemo(() => contacts.find((c) => c.id === activeId), [contacts, activeId]);
 
   const openContact = async (peerUserId: string) => {
     if (!me) return;
@@ -198,6 +241,38 @@ export default function ChatPage() {
     }
   };
 
+  const startCall = useCallback((kind: 'voice' | 'video') => {
+    if (!active || !me || !socketRef.current) return;
+    const roomId = `dm-${[me.id, active.id].sort().join('-')}-${Math.random().toString(36).slice(2, 8)}`;
+    setRinging({ toUserId: active.id, roomId });
+    setNotice(`${kind === 'video' ? 'Video' : 'Voice'} calling ${active.displayName}...`);
+    socketRef.current.emit('user:call', { toUserId: active.id, roomId }, (res: { ok: boolean; error?: string }) => {
+      if (!res?.ok) {
+        setRinging(null);
+        setNotice(res?.error === 'user_offline' ? `${active.displayName} is offline.` : 'Call could not be placed.');
+      }
+    });
+  }, [active, me]);
+
+  const cancelCall = useCallback(() => {
+    if (!ringing || !socketRef.current) return;
+    socketRef.current.emit('user:call-cancel', { toUserId: ringing.toUserId, roomId: ringing.roomId });
+    setRinging(null);
+    setNotice(null);
+  }, [ringing]);
+
+  const acceptInvite = useCallback(() => {
+    if (!invite || !socketRef.current) return;
+    socketRef.current.emit('user:call-response', { toUserId: invite.from.id, roomId: invite.roomId, accepted: true });
+    window.location.href = `/call?room=${encodeURIComponent(invite.roomId)}`;
+  }, [invite]);
+
+  const declineInvite = useCallback(() => {
+    if (!invite || !socketRef.current) return;
+    socketRef.current.emit('user:call-response', { toUserId: invite.from.id, roomId: invite.roomId, accepted: false });
+    setInvite(null);
+  }, [invite]);
+
   const send = (text: string) => {
     if (!activeId || !me) return;
     const cid = userToConv.current.get(activeId);
@@ -217,7 +292,6 @@ export default function ChatPage() {
     if (cid) clientRef.current?.setTyping(cid, typing);
   };
 
-  const active = useMemo(() => contacts.find((c) => c.id === activeId), [contacts, activeId]);
   const messages = useMemo(() => {
     if (!activeId) return [];
     const cid = userToConv.current.get(activeId);
@@ -237,6 +311,7 @@ export default function ChatPage() {
           </div>
           <ContactList
             contacts={contacts}
+            typingById={peerTyping}
             activeId={activeId}
             onSelect={openContact}
             query={query}
@@ -267,14 +342,33 @@ export default function ChatPage() {
                   </div>
                 </div>
                 <div className="actions">
-                  <button title="Voice call" aria-label="Voice call">📞</button>
-                  <button title="Video call" aria-label="Video call">📹</button>
+                  <button title="Voice call" aria-label="Voice call" onClick={() => startCall('voice')}>📞</button>
+                  <button title="Video call" aria-label="Video call" onClick={() => startCall('video')}>📹</button>
                   <button title="Remote desktop" aria-label="Remote desktop"
                           onClick={() => router.push('/remote')}>🖥️</button>
                   <button title="Search">🔍</button>
                   <button title="Menu">⋮</button>
                 </div>
               </div>
+              {invite && (
+                <div className="call-banner">
+                  <span>{invite.from.displayName} is calling</span>
+                  <button onClick={declineInvite}>Decline</button>
+                  <button className="accept" onClick={acceptInvite}>Answer</button>
+                </div>
+              )}
+              {ringing && (
+                <div className="call-banner">
+                  <span>Calling {active.displayName}</span>
+                  <button onClick={cancelCall}>Cancel</button>
+                </div>
+              )}
+              {notice && !invite && !ringing && (
+                <div className="call-banner notice">
+                  <span>{notice}</span>
+                  <button onClick={() => setNotice(null)}>Dismiss</button>
+                </div>
+              )}
               <MessageList messages={messages} meId={me?.id ?? ''} />
               <Composer onSend={send} onTyping={onTyping} />
             </>
