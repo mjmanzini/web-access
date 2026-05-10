@@ -22,6 +22,7 @@ $clientDir = Join-Path $repoRoot 'web-client'
 Push-Location $clientDir
 try {
   $env:NEXT_PUBLIC_SIGNALING_URL = $SignalingUrl
+  $env:WEB_CLIENT_OUTPUT_MODE = 'export'
 
   Write-Host "[pages] building static export for $SignalingUrl" -ForegroundColor Cyan
   npm run build:pages
