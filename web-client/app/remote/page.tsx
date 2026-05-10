@@ -22,6 +22,24 @@ interface VisitorIdentity {
 
 const IDENTITY_KEY = 'wa:identity';
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function validateIdentity(identity: VisitorIdentity) {
+  const fullName = identity.fullName.trim();
+  const email = identity.email.trim().toLowerCase();
+  if (fullName.length < 2) return 'Enter your full name.';
+  if (fullName.length > 80) return 'Full name must be 80 characters or less.';
+  if (!EMAIL_RE.test(email)) return 'Enter a valid email address.';
+  return '';
+}
+
+function validateSessionId(value: string) {
+  const cleaned = value.replace(/[^a-zA-Z0-9_-]/g, '').trim();
+  if (cleaned.length < 4) return 'Enter a valid Session ID.';
+  if (cleaned.length > 80) return 'Session ID is too long.';
+  return '';
+}
+
 function loadIdentity(): VisitorIdentity {
   if (typeof window === 'undefined') return { fullName: '', email: '' };
   try {
@@ -60,6 +78,7 @@ function RemotePageInner() {
   const router = useRouter();
   const params = useSearchParams();
   const sessionId = params.get('sessionId')?.trim() || '';
+  const waitingSessionId = params.get('waitingSessionId')?.trim() || '';
   const codeParam = params.get('code')?.trim() || '';
   const [me, setMe] = useState<StoredUser | null>(null);
   const [modal, setModal] = useState<ModalMode>(null);
@@ -76,6 +95,16 @@ function RemotePageInner() {
     setMe(loadStoredUser());
     setIdentity(loadIdentity());
   }, []);
+
+  useEffect(() => {
+    if (!waitingSessionId) return;
+    setWaiting({
+      remoteId: '',
+      pin: '',
+      sessionId: waitingSessionId,
+      expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(),
+    });
+  }, [waitingSessionId]);
 
   useEffect(() => {
     if (codeParam) {
@@ -98,8 +127,8 @@ function RemotePageInner() {
     }
     const fullName = identity.fullName.trim();
     const email = identity.email.trim().toLowerCase();
-    if (fullName.length < 2) throw new Error('Enter your full name.');
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Enter a valid email address.');
+    const validation = validateIdentity(identity);
+    if (validation) throw new Error(validation);
     saveIdentity({ fullName, email });
     const user = await registerUser(`${createUsername(email)}.${Date.now().toString(36)}`, fullName);
     setMe(user);
@@ -127,7 +156,8 @@ function RemotePageInner() {
     try {
       await ensureUser();
       const cleaned = joinCode.replace(/[^a-zA-Z0-9_-]/g, '').trim();
-      if (cleaned.length < 4) throw new Error('Enter a valid Session ID.');
+      const validation = validateSessionId(joinCode);
+      if (validation) throw new Error(validation);
       router.push(`/remote?sessionId=${encodeURIComponent(cleaned)}`);
     } catch (e) {
       setErr((e as Error).message || 'Could not join the session.');
@@ -143,11 +173,21 @@ function RemotePageInner() {
   };
 
   const sendInvite = () => {
-    if (!inviteEmail.trim() || !inviteLink) return;
+    if (!EMAIL_RE.test(inviteEmail.trim()) || !inviteLink) {
+      setErr('Enter a valid invite email address.');
+      return;
+    }
+    setErr(null);
     const subject = encodeURIComponent('Join my Web-Access remote session');
     const body = encodeURIComponent(`Join my secure remote session: ${inviteLink}`);
     window.location.href = `mailto:${inviteEmail.trim()}?subject=${subject}&body=${body}`;
     setInviteSent(true);
+  };
+
+  const openWaitingWindow = () => {
+    if (!waiting || typeof window === 'undefined') return;
+    const url = `${window.location.origin}/remote?waitingSessionId=${encodeURIComponent(waiting.sessionId)}`;
+    window.open(url, 'web-access-remote-waiting', 'popup=yes,width=520,height=760');
   };
 
   const recentList = useMemo(() => (
@@ -205,10 +245,14 @@ function RemotePageInner() {
       {waiting && (
         <section className="wa-waiting-room">
           <div className="wa-session-code">{displaySessionId}</div>
-          <button className="wa-copy-btn" onClick={copyInvite}>
-            <span aria-hidden="true">□</span>
-            {copied ? 'Copied' : 'Copy Invite Link'}
-          </button>
+          <div className="wa-link-box" title={inviteLink}>{inviteLink}</div>
+          <div className="wa-waiting-actions">
+            <button className="wa-copy-btn" onClick={copyInvite}>
+              <span aria-hidden="true">□</span>
+              {copied ? 'Copied' : 'Copy Invite Link'}
+            </button>
+            <button className="wa-copy-btn" onClick={openWaitingWindow}>Open Waiting Room Window</button>
+          </div>
           <div className="wa-invite-line">
             <label className="wa-floating-field">
               <input
@@ -219,10 +263,11 @@ function RemotePageInner() {
               />
               <span>Email Address</span>
             </label>
-            <button className="wa-primary-btn" onClick={sendInvite} disabled={!inviteEmail.trim()}>
+            <button className="wa-primary-btn" onClick={sendInvite} disabled={!EMAIL_RE.test(inviteEmail.trim())}>
               {inviteSent ? 'Invite Ready' : 'Send Invite'}
             </button>
           </div>
+          {err && <div className="wa-form-error">{err}</div>}
           <p className="wa-helper">This secure link will expire automatically when all users leave the session.</p>
           <button className="wa-start-btn" onClick={() => router.push(`/remote?sessionId=${encodeURIComponent(waiting.sessionId)}`)}>
             Start Session

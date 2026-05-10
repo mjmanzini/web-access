@@ -135,11 +135,11 @@ export function RemoteSessionView({ sessionId }: { sessionId: string }) {
     video.play().catch(() => {});
   }, [streamReady]);
 
-  const endSession = () => {
+  const endSession = useCallback(() => {
     try { socketRef.current?.disconnect(); } catch {}
     try { pcRef.current?.close(); } catch {}
-    router.push('/remote');
-  };
+    router.replace('/remote');
+  }, [router]);
 
   const overlay = useMemo(() => {
     if (phase === 'connected') return null;
@@ -154,15 +154,15 @@ export function RemoteSessionView({ sessionId }: { sessionId: string }) {
           <div style={{ color: 'var(--wa-muted)', fontSize: 13 }}>
             Session <code>{sessionId.slice(0, 8)}…</code>
           </div>
-          {(phase === 'error' || phase === 'ended') && (
-            <button className="btn-primary" style={{ marginTop: 18, maxWidth: 240 }} onClick={endSession}>
+          {(phase === 'waiting-host' || phase === 'error' || phase === 'ended') && (
+            <button className="btn-primary" style={{ marginTop: 18, maxWidth: 240, pointerEvents: 'auto' }} onClick={endSession}>
               Back to dashboard
             </button>
           )}
         </div>
       </div>
     );
-  }, [phase, sessionId, status]);
+  }, [endSession, phase, sessionId, status]);
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: '#000', overflow: 'hidden' }}>
@@ -179,7 +179,7 @@ export function RemoteSessionView({ sessionId }: { sessionId: string }) {
       <div style={{
         position: 'absolute', top: 12, left: 12, right: 12,
         display: 'flex', gap: 8, alignItems: 'center',
-        zIndex: 2, pointerEvents: phase === 'connected' ? 'auto' : 'none',
+        zIndex: 2, pointerEvents: 'auto',
       }}>
         <button onClick={endSession} style={{
           background: 'rgba(0,0,0,.55)', color: '#fff',
@@ -201,6 +201,7 @@ export function RemoteSessionView({ sessionId }: { sessionId: string }) {
             backdropFilter: 'blur(8px)',
           }}
           title="Toggle input mode"
+          aria-label="Toggle input mode"
         >
           {mode === 'trackpad' ? 'Trackpad' : 'Touch'}
         </button>

@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import type { ReactNode } from 'react';
+import { ThemeToggle } from '../theme/ThemeProvider';
 
 type NavItem = {
   href: string;
@@ -77,6 +78,7 @@ export function AppShell({
         <div className="wa-rail-items">
           {navItems.map((item) => <NavLink key={item.href} item={item} />)}
         </div>
+        <ThemeToggle className="wa-theme-toggle" />
       </nav>
 
       <aside className="wa-list-pane">
@@ -85,6 +87,7 @@ export function AppShell({
             <h1>{title}</h1>
             {subtitle && <p>{subtitle}</p>}
           </div>
+          <ThemeToggle className="wa-theme-toggle inline" />
         </div>
         {list ?? <div className="wa-list-empty">No recent activity</div>}
       </aside>

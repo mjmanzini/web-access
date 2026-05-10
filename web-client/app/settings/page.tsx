@@ -1,6 +1,7 @@
 'use client';
 
 import { AppShell } from '../../components/app/AppShell';
+import { ThemeToggle } from '../../components/theme/ThemeProvider';
 
 export default function SettingsPage() {
   return (
@@ -12,7 +13,14 @@ export default function SettingsPage() {
           <p>Profile, device, notification, and privacy controls will appear here.</p>
         </div>
         <section className="wa-waiting-room">
-          <div className="wa-helper">The navigation route is ready for the unified app shell.</div>
+          <h3 className="wa-settings-title">Appearance</h3>
+          <div className="wa-settings-row">
+            <div>
+              <strong>Theme</strong>
+              <span>Switch between WhatsApp light, WhatsApp dark, and system mode.</span>
+            </div>
+            <ThemeToggle className="wa-theme-toggle settings" />
+          </div>
         </section>
       </div>
     </AppShell>

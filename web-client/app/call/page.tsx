@@ -17,6 +17,7 @@ function defaultSignalingUrl(): string {
 }
 const SIGNALING_URL = process.env.NEXT_PUBLIC_SIGNALING_URL || defaultSignalingUrl();
 const IDENTITY_KEY = 'wa:identity';
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function loadIdentity() {
   if (typeof window === 'undefined') return { fullName: '', email: '' };
@@ -35,6 +36,21 @@ function saveIdentity(fullName: string, email: string) {
 
 function generateRoomId() {
   return Array.from({ length: 5 }, () => String.fromCharCode(65 + Math.floor(Math.random() * 26))).join('');
+}
+
+function validateNameEmail(fullName: string, email: string) {
+  if (fullName.trim().length < 2) return 'Enter your full name.';
+  if (fullName.trim().length > 80) return 'Full name must be 80 characters or less.';
+  if (!EMAIL_RE.test(email.trim())) return 'Enter a valid email address.';
+  return '';
+}
+
+function validateRoomId(value: string) {
+  const room = value.trim().toUpperCase();
+  if (room.length < 4) return 'Enter a valid session code.';
+  if (room.length > 60) return 'Session code is too long.';
+  if (!/^[A-Z0-9_-]+$/.test(room)) return 'Use only letters, numbers, dashes, or underscores.';
+  return '';
 }
 
 interface TrackEntry {
@@ -84,6 +100,14 @@ function CallInner() {
     if (saved.email) setEmail(saved.email);
   }, []);
 
+  useEffect(() => {
+    const waiting = params.get('waitingRoom')?.trim().toUpperCase();
+    if (waiting) {
+      setRoomId(waiting);
+      setWaitingRoomId(waiting);
+    }
+  }, [params]);
+
   const upsertTrack = useCallback((entry: TrackEntry) => {
     setTracks((prev) => {
       // One track of the same (peer, source, kind) replaces the previous.
@@ -114,8 +138,8 @@ function CallInner() {
   function ensureIdentity() {
     const fullName = name.trim();
     const address = email.trim().toLowerCase();
-    if (fullName.length < 2) throw new Error('Enter your full name.');
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address)) throw new Error('Enter a valid email address.');
+    const validation = validateNameEmail(fullName, address);
+    if (validation) throw new Error(validation);
     saveIdentity(fullName, address);
   }
 
@@ -247,7 +271,8 @@ function CallInner() {
     try {
       ensureIdentity();
       const targetRoom = roomId.trim().toUpperCase();
-      if (!targetRoom) throw new Error('Enter a session code.');
+      const validation = validateRoomId(targetRoom);
+      if (validation) throw new Error(validation);
       setRoomId(targetRoom);
       setModal(null);
       await join(targetRoom);
@@ -277,11 +302,21 @@ function CallInner() {
   };
 
   const sendInvite = () => {
-    if (!inviteEmail.trim() || !inviteLink) return;
+    if (!EMAIL_RE.test(inviteEmail.trim()) || !inviteLink) {
+      setStatus('Enter a valid invite email address.');
+      return;
+    }
+    setStatus('');
     const subject = encodeURIComponent('Join my Web-Access call');
     const body = encodeURIComponent(`Join my secure call: ${inviteLink}`);
     window.location.href = `mailto:${inviteEmail.trim()}?subject=${subject}&body=${body}`;
     setInviteSent(true);
+  };
+
+  const openWaitingWindow = () => {
+    if (!waitingRoomId || typeof window === 'undefined') return;
+    const url = `${window.location.origin}/call?waitingRoom=${encodeURIComponent(waitingRoomId)}`;
+    window.open(url, 'web-access-call-waiting', 'popup=yes,width=520,height=760');
   };
 
   /* ---------------- render ---------------- */
@@ -323,13 +358,17 @@ function CallInner() {
           {waitingRoomId && (
             <section className="wa-waiting-room">
               <div className="wa-session-code">{waitingRoomId}</div>
-              <button className="wa-copy-btn" onClick={copyInvite}><span aria-hidden="true">□</span>{copied ? 'Copied' : 'Copy Invite Link'}</button>
+              <div className="wa-link-box" title={inviteLink}>{inviteLink}</div>
+              <div className="wa-waiting-actions">
+                <button className="wa-copy-btn" onClick={copyInvite}><span aria-hidden="true">□</span>{copied ? 'Copied' : 'Copy Invite Link'}</button>
+                <button className="wa-copy-btn" onClick={openWaitingWindow}>Open Waiting Room Window</button>
+              </div>
               <div className="wa-invite-line">
                 <label className="wa-floating-field">
                   <input value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} placeholder=" " type="email" />
                   <span>Email Address</span>
                 </label>
-                <button className="wa-primary-btn" onClick={sendInvite} disabled={!inviteEmail.trim()}>{inviteSent ? 'Invite Ready' : 'Send Invite'}</button>
+                <button className="wa-primary-btn" onClick={sendInvite} disabled={!EMAIL_RE.test(inviteEmail.trim())}>{inviteSent ? 'Invite Ready' : 'Send Invite'}</button>
               </div>
               <p className="wa-helper">This secure link will expire automatically when all users leave the session.</p>
               <button className="wa-start-btn" onClick={() => void join(waitingRoomId)} disabled={phase === 'joining'}>
@@ -338,7 +377,7 @@ function CallInner() {
             </section>
           )}
 
-          {status && <div className="wa-form-error">{status}</div>}
+          {status && !modal && <div className="wa-form-error">{status}</div>}
         </div>
 
         {modal && (
