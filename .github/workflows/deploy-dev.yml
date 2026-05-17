@@ -1,0 +1,76 @@
+name: deploy-dev
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
+jobs:
+  deploy-dev:
+    name: deploy-development
+    runs-on: ubuntu-latest
+    environment: development
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Validate development deploy configuration
+        shell: bash
+        env:
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+        run: |
+          set -euo pipefail
+          test -n "${GCP_PROJECT_ID:-}" || { echo 'Missing development secret: GCP_PROJECT_ID'; exit 1; }
+          test -n "${GCP_WORKLOAD_IDENTITY_PROVIDER:-}" || { echo 'Missing development secret: GCP_WORKLOAD_IDENTITY_PROVIDER'; exit 1; }
+          test -n "${GCP_SERVICE_ACCOUNT:-}" || { echo 'Missing development secret: GCP_SERVICE_ACCOUNT'; exit 1; }
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy development stack
+        shell: pwsh
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          $setEnv = @(
+            'FIREBASE_PROJECT_ID=${{ secrets.GCP_PROJECT_ID }}',
+            'WEBAUTHN_RP_NAME=Web-Access Dev'
+          )
+          $extraEnv = '${{ vars.DEV_SET_ENV }}'
+          if ($extraEnv) {
+            $setEnv += ($extraEnv -split '\s*,\s*' | Where-Object { $_ })
+          }
+
+          $setSecrets = @()
+          $extraSecrets = '${{ vars.DEV_SET_SECRETS }}'
+          if ($extraSecrets) {
+            $setSecrets += ($extraSecrets -split '\s*,\s*' | Where-Object { $_ })
+          }
+
+          .\scripts\deploy-dev.ps1 `
+            -ProjectId '${{ secrets.GCP_PROJECT_ID }}' `
+            -Region '${{ vars.GCP_REGION || 'us-central1' }}' `
+            -SignalServiceName '${{ vars.DEV_SIGNALING_SERVICE || 'web-access-signaling-dev' }}' `
+            -SignalImageName '${{ vars.DEV_SIGNALING_IMAGE || 'web-access-signaling-dev' }}' `
+            -PagesProjectName '${{ vars.DEV_PAGES_PROJECT || 'web-access' }}' `
+            -PagesBranch '${{ vars.DEV_PAGES_BRANCH || 'development' }}' `
+            -ClientUrl '${{ vars.DEV_CLIENT_URL || 'https://development.example.com' }}' `
+            -SetEnv $setEnv `
+            -SetSecrets $setSecrets

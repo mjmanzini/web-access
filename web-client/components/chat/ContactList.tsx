@@ -10,6 +10,7 @@ export interface Contact {
   unread?: number;
   online?: boolean;
   avatarUrl?: string | null;
+  blocked?: boolean;
 }
 
 function initials(name: string) {

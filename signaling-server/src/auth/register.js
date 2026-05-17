@@ -9,6 +9,7 @@
  */
 import crypto from 'node:crypto';
 import { createStorage } from '../storage/index.js';
+import { createRateLimitMiddleware } from '../rate-limit.js';
 
 function sha256(buf) { return crypto.createHash('sha256').update(buf).digest(); }
 
@@ -32,7 +33,14 @@ function deriveUsername({ username, email, phone, displayName }) {
 }
 
 export function attachAuthRoutes(app, users, storage = createStorage()) {
-  app.post('/api/auth/register', async (req, res) => {
+  const registerRateLimit = createRateLimitMiddleware({
+    windowMs: 10 * 60 * 1000,
+    max: 10,
+    keyFn: (req) => req.body?.email || req.body?.phone || req.ip,
+    error: 'register_rate_limited',
+  });
+
+  app.post('/api/auth/register', registerRateLimit, async (req, res) => {
     const { displayName, email, phone, username } = req.body || {};
     if (!displayName || String(displayName).trim().length < 2) {
       return res.status(400).json({ error: 'invalid_display_name' });

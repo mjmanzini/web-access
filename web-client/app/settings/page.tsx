@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { AppShell } from '../../components/app/AppShell';
 import { ThemeToggle } from '../../components/theme/ThemeProvider';
+import { PanicContactsSettings } from '../../components/khuloh/PanicContactsSettings';
 import {
   loadStoredUser,
   saveStoredUser,
@@ -185,6 +186,8 @@ export default function SettingsPage() {
             <ThemeToggle className="wa-theme-toggle settings" />
           </div>
         </section>
+
+        <PanicContactsSettings />
       </div>
     </AppShell>
   );

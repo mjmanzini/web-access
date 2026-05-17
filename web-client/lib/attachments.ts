@@ -112,9 +112,22 @@ export async function fileToDataAttachment(
   kind: MediaAttachment['kind'],
   extra: Partial<MediaAttachment> = {},
 ): Promise<MediaAttachment> {
-  if (file.size > MAX_ATTACHMENT_BYTES) {
+  // Phase 8 data-lite: shrink images for slow networks before encoding so
+  // we (a) stay under MAX_ATTACHMENT_BYTES more often and (b) save MBs of
+  // data on 2G/3G. Non-image kinds pass through unchanged.
+  let working: File = file;
+  if (kind === 'image') {
+    try {
+      const { downsizeForNetwork } = await import('./khuloh/image');
+      const res = await downsizeForNetwork(file);
+      working = res.file;
+    } catch {
+      // Downscale is best-effort; fall back to the original file.
+    }
+  }
+  if (working.size > MAX_ATTACHMENT_BYTES) {
     throw new Error(
-      `File is too large (${Math.round(file.size / 1024)} KB). ` +
+      `File is too large (${Math.round(working.size / 1024)} KB). ` +
       `Limit is ${Math.round(MAX_ATTACHMENT_BYTES / 1024)} KB per message.`,
     );
   }
@@ -122,13 +135,13 @@ export async function fileToDataAttachment(
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result || ''));
     reader.onerror = () => reject(reader.error || new Error('read_failed'));
-    reader.readAsDataURL(file);
+    reader.readAsDataURL(working);
   });
   return {
     kind,
-    mime: file.type || 'application/octet-stream',
-    name: file.name,
-    size: file.size,
+    mime: working.type || 'application/octet-stream',
+    name: working.name,
+    size: working.size,
     data,
     ...extra,
   };

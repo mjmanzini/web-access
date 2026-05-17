@@ -9,13 +9,41 @@
 **/out/
 **/dist/
 .wrangler/
+web-build/
+.expo/
+
+# Expo / React Native local outputs
+expo-env.d.ts
+.kotlin/
+.metro-health-check*
+/ios
+/android
+
+# Certificates and native signing material
+*.pem
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
 
 # Logs
 **/*.log
 npm-debug.log*
+npm-debug.*
 yarn-debug.log*
+yarn-debug.*
 yarn-error.log*
 pnpm-debug.log*
+
+# Local env files
+.env*.local
+
+# TypeScript generated output
+*.tsbuildinfo
+
+# Merge leftovers
+*.orig.*
 
 # OS/editor noise
 .DS_Store

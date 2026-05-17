@@ -82,6 +82,24 @@ export async function sendContactInviteEmail({ to, inviteeName, inviterName, inv
   });
 }
 
+/**
+ * Generic mailer used by Khuloh modules (panic alerts, etc).
+ * Returns false silently when SMTP is not configured.
+ */
+export async function sendMail({ to, subject, text, html, replyTo }) {
+  const mailer = getTransport();
+  if (!mailer) return false;
+  await mailer.transport.sendMail({
+    from: mailer.config.from,
+    replyTo: replyTo || mailer.config.replyTo,
+    to,
+    subject,
+    text,
+    html,
+  });
+  return true;
+}
+
 function escapeHtml(value) {
   return String(value)
     .replaceAll('&', '&amp;')

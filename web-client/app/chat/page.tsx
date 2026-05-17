@@ -34,6 +34,7 @@ interface KnownContact {
   reason?: string;
   lastContactAt?: string | null;
   avatarUrl?: string | null;
+  blocked?: boolean;
 }
 
 interface IncomingInvite {
@@ -50,6 +51,20 @@ interface AddContactResult {
 
 function contactKey(user: { id: string; username?: string; displayName: string }) {
   return user.id || user.username || user.displayName.toLowerCase();
+}
+
+function hasErrorCode(error: unknown, code: string) {
+  return String(error instanceof Error ? error.message : error || '').includes(code);
+}
+
+function interactionNotice(displayName: string, error: unknown) {
+  if (hasErrorCode(error, 'user_blocked')) return `Unblock ${displayName} to chat or call.`;
+  if (hasErrorCode(error, 'blocked_by_user')) return `${displayName} is not available for new chats or calls.`;
+  if (hasErrorCode(error, 'message_rate_limited')) return 'You are sending messages too quickly. Try again in a moment.';
+  if (hasErrorCode(error, 'call_rate_limited')) return 'You are placing calls too quickly. Wait a moment and try again.';
+  if (hasErrorCode(error, 'invite_rate_limited')) return 'Invite limit reached. Try again later.';
+  if (hasErrorCode(error, 'report_rate_limited')) return 'Report limit reached. Try again later.';
+  return null;
 }
 
 export default function ChatPage() {
@@ -72,6 +87,8 @@ export default function ChatPage() {
   const [groupMembers, setGroupMembers] = useState<Set<string>>(new Set());
   const [groupBusy, setGroupBusy] = useState(false);
   const [groupError, setGroupError] = useState<string | null>(null);
+  const [blockBusy, setBlockBusy] = useState(false);
+  const [reportBusy, setReportBusy] = useState(false);
   const clientRef = useRef<ChatClient | null>(null);
   const socketRef = useRef<Socket | null>(null);
   // Map peerUserId <-> conversationId for 1:1 chats so the contact list
@@ -147,9 +164,11 @@ export default function ChatPage() {
             avatarUrl: u.avatarUrl ?? null,
             lastMessage: meta?.last_body
               ? (isEncryptedBody(meta.last_body) ? 'Encrypted message' : meta.last_body)
+              : u.blocked ? 'Blocked contact'
               : u.reason ? `Known from ${u.reason}` : undefined,
             lastMessageAt: meta?.last_msg_at ?? u.lastContactAt ?? undefined,
             unread: meta?.unread ?? 0,
+            blocked: u.blocked ?? false,
           };
         });
 
@@ -257,11 +276,23 @@ export default function ChatPage() {
       setPeerTyping((prev) => ({ ...prev, [peerId]: typing }));
     });
 
+    const offErr = cc.onError(({ clientId, error }) => {
+      setNotice(interactionNotice(activeIdRef.current ? (contactsRef.current.find((c) => c.id === activeIdRef.current)?.displayName || 'This contact') : 'This contact', error) || 'Message could not be sent.');
+      if (!clientId) return;
+      setThreads((prev) => {
+        const next: Record<string, ChatMessage[]> = {};
+        for (const [cid, msgs] of Object.entries(prev)) {
+          next[cid] = msgs.filter((m) => m.clientId !== clientId);
+        }
+        return next;
+      });
+    });
+
     const offPresence = cc.onPresence(({ userId, online }) => {
       setContacts((prev) => prev.map((c) => c.id === userId ? { ...c, online } : c));
     });
 
-    return () => { offMsg(); offRcpt(); offTyping(); offPresence(); cc.disconnect(); };
+    return () => { offMsg(); offRcpt(); offTyping(); offPresence(); offErr(); cc.disconnect(); };
   }, [me]);
 
   useEffect(() => {
@@ -334,7 +365,18 @@ export default function ChatPage() {
       if (!cid) {
         const r = await api<{ id: string }>('/api/conversations', {
           method: 'POST', body: JSON.stringify({ peerUserId: id }),
-        }).catch(() => null);
+        }).catch((error) => {
+          const displayName = contactsRef.current.find((contact) => contact.id === id)?.displayName || 'This contact';
+          setNotice(interactionNotice(displayName, error) || 'Could not open this chat.');
+          if (hasErrorCode(error, 'user_blocked') || hasErrorCode(error, 'blocked_by_user')) {
+            setContacts((prev) => prev.map((contact) => contact.id === id ? {
+              ...contact,
+              blocked: true,
+              lastMessage: 'Blocked contact',
+            } : contact));
+          }
+          return null;
+        });
         if (!r) return;
         cid = r.id;
         userToConv.current.set(id, cid);
@@ -354,16 +396,70 @@ export default function ChatPage() {
 
   const startCall = useCallback((kind: 'voice' | 'video') => {
     if (!active || !me || !socketRef.current || isGroupActive) return;
+    if (active.blocked) {
+      setNotice(`Unblock ${active.displayName} to call.`);
+      return;
+    }
     const roomId = `dm-${[me.id, active.id].sort().join('-')}-${Math.random().toString(36).slice(2, 8)}`;
     setRinging({ toUserId: active.id, roomId });
     setNotice(`${kind === 'video' ? 'Video' : 'Voice'} calling ${active.displayName}...`);
     socketRef.current.emit('user:call', { toUserId: active.id, roomId }, (res: { ok: boolean; error?: string }) => {
       if (!res?.ok) {
         setRinging(null);
-        setNotice(res?.error === 'user_offline' ? `${active.displayName} is offline.` : 'Call could not be placed.');
+        setNotice(
+          res?.error === 'user_offline'
+            ? `${active.displayName} is offline.`
+            : interactionNotice(active.displayName, res?.error) || 'Call could not be placed.',
+        );
       }
     });
   }, [active, me, isGroupActive]);
+
+  const toggleBlockActive = useCallback(async () => {
+    if (!active || isGroupActive || blockBusy) return;
+    const nextBlocked = !active.blocked;
+    setBlockBusy(true);
+    try {
+      await api<{ ok: boolean; blocked: boolean }>(`/api/contacts/${encodeURIComponent(active.id)}/block`, {
+        method: 'POST',
+        body: JSON.stringify({ blocked: nextBlocked }),
+      });
+      setContacts((prev) => prev.map((contact) => contact.id === active.id ? {
+        ...contact,
+        blocked: nextBlocked,
+        lastMessage: nextBlocked ? 'Blocked contact' : (contact.lastMessage === 'Blocked contact' ? 'Tap to start chatting' : contact.lastMessage),
+      } : contact));
+      setNotice(nextBlocked ? `${active.displayName} has been blocked.` : `${active.displayName} has been unblocked.`);
+    } catch (error) {
+      setNotice('Could not update this contact right now.');
+    } finally {
+      setBlockBusy(false);
+    }
+  }, [active, isGroupActive, blockBusy]);
+
+  const reportActive = useCallback(async () => {
+    if (!active || isGroupActive || reportBusy) return;
+    const reason = window.prompt(`Report ${active.displayName} for`, 'harassment');
+    if (!reason || reason.trim().length < 3) return;
+    const details = window.prompt('Add any details for moderation (optional)', '') || '';
+    setReportBusy(true);
+    try {
+      await api<{ id: string }>('/api/reports/users', {
+        method: 'POST',
+        body: JSON.stringify({
+          reportedUserId: active.id,
+          reason: reason.trim(),
+          details: details.trim() || undefined,
+          conversationId: activeConversationId,
+        }),
+      });
+      setNotice(`Report submitted for ${active.displayName}.`);
+    } catch (error) {
+      setNotice(interactionNotice(active.displayName, error) || 'Could not submit the report right now.');
+    } finally {
+      setReportBusy(false);
+    }
+  }, [active, isGroupActive, reportBusy, activeConversationId]);
 
   const cancelCall = useCallback(() => {
     if (!ringing || !socketRef.current) return;
@@ -443,7 +539,10 @@ export default function ChatPage() {
       setNotice(`Invite email sent to ${email}.`);
     } catch (e) {
       const message = (e as Error).message || 'Could not add contact.';
-      if (message.includes('smtp_not_configured')) {
+      const rateNotice = interactionNotice(displayName, e);
+      if (rateNotice) {
+        setContactError(rateNotice);
+      } else if (message.includes('smtp_not_configured')) {
         setContactError('SMTP is not configured on the server yet. Add SMTP settings and redeploy to send invites.');
       } else if (message.includes('cannot_add_self')) {
         setContactError('Use a different email address.');
@@ -510,6 +609,10 @@ export default function ChatPage() {
 
   const send = (text: string) => {
     if (!activeId || !me || !activeConversationId) return;
+    if (active?.blocked) {
+      setNotice(`Unblock ${active.displayName} to send messages.`);
+      return;
+    }
     const cid = activeConversationId;
     const clientId = clientRef.current?.send(cid, text) ?? String(Date.now());
     const tempId = `tmp-${clientId}`;
@@ -592,6 +695,7 @@ export default function ChatPage() {
                     {isGroupActive
                       ? (groupMeta.current.get(activeId!.slice(2))?.members
                           .map((m) => m.displayName).join(', ') || 'Group')
+                      : active.blocked ? 'blocked'
                       : peerTyping[active.id] ? 'typing…'
                       : active.online ? 'online' : 'offline'}
                   </div>
@@ -599,10 +703,22 @@ export default function ChatPage() {
                 <div className="actions">
                   {!isGroupActive && (
                     <>
-                      <button title="Voice call" aria-label="Voice call" onClick={() => startCall('voice')}>📞</button>
-                      <button title="Video call" aria-label="Video call" onClick={() => startCall('video')}>📹</button>
+                      <button title="Voice call" aria-label="Voice call" onClick={() => startCall('voice')} disabled={!!active.blocked}>📞</button>
+                      <button title="Video call" aria-label="Video call" onClick={() => startCall('video')} disabled={!!active.blocked}>📹</button>
                       <button title="Remote desktop" aria-label="Remote desktop"
                               onClick={() => router.push('/remote')}>🖥️</button>
+                      <button
+                        title={active.blocked ? 'Unblock contact' : 'Block contact'}
+                        aria-label={active.blocked ? 'Unblock contact' : 'Block contact'}
+                        onClick={toggleBlockActive}
+                        disabled={blockBusy}
+                      >{active.blocked ? '✅' : '⛔'}</button>
+                      <button
+                        title="Report contact"
+                        aria-label="Report contact"
+                        onClick={reportActive}
+                        disabled={reportBusy}
+                      >⚠️</button>
                     </>
                   )}
                   <button title="Search">🔍</button>
@@ -629,7 +745,7 @@ export default function ChatPage() {
                 </div>
               )}
               <MessageList messages={messages} meId={me?.id ?? ''} />
-              <Composer onSend={send} onTyping={onTyping} />
+              <Composer onSend={send} onTyping={onTyping} disabled={!!active?.blocked} />
             </>
           )}
         </main>

@@ -15,7 +15,7 @@ import { attachAuthRoutes } from './auth/register.js';
 import { mountWebAuthn, WEBAUTHN_SCHEMA_SQL } from './auth/webauthn.js';
 import { mountOAuth, OAUTH_SCHEMA_SQL } from './auth/oauth.js';
 import {
-  CHAT_SCHEMA_SQL, attachChatRoutes, attachChatSignaling,
+  CHAT_SCHEMA_SQL, SAFETY_SCHEMA_SQL, attachChatRoutes, attachChatSignaling,
 } from './chat/messages.js';
 import {
   ensureLastSeenColumn, attachPresenceRoutes, attachPresenceBroadcast,
@@ -23,6 +23,15 @@ import {
 import { REMOTE_SCHEMA_SQL, attachRemoteRoutes } from './remote/sessions.js';
 import { attachDriveRoutes } from './drive.js';
 import { createStorage } from './storage/index.js';
+import { attachKhulohSignaling } from './khuloh/socket.js';
+import { attachZoneRoutes } from './khuloh/zones.js';
+import { attachSafeSpotRoutes } from './khuloh/safe-spots.js';
+import { attachMeetupRoutes } from './khuloh/meetups.js';
+import { attachPanicRoutes } from './khuloh/panic.js';
+import { attachPartnerQrRoutes } from './khuloh/partner-qr.js';
+import { attachKhulohProfileRoutes } from './khuloh/profile.js';
+import { attachSafetyCheckinRoutes } from './khuloh/safety-checkins.js';
+import { attachTrustRoutes } from './khuloh/trust.js';
 
 const PORT = Number(process.env.PORT || 4000);
 const CORS_ORIGIN = process.env.CORS_ORIGIN || '*';
@@ -70,9 +79,18 @@ if (USE_POSTGRES) registerExtraSchema(OAUTH_SCHEMA_SQL);
 attachPresenceRoutes(app, users, requireAuth);
 attachRemoteRoutes(app, pairing, users, requireAuth);
 attachDriveRoutes(app, storage, requireAuth);
+attachZoneRoutes(app, requireAuth);
+attachKhulohProfileRoutes(app, requireAuth);
+attachSafeSpotRoutes(app, requireAuth);
+attachMeetupRoutes(app, requireAuth);
+attachPanicRoutes(app, requireAuth);
+attachSafetyCheckinRoutes(app, requireAuth);
+attachPartnerQrRoutes(app, requireAuth);
+attachTrustRoutes(app, requireAuth);
 
 if (USE_POSTGRES) {
   registerExtraSchema(CHAT_SCHEMA_SQL);
+  registerExtraSchema(SAFETY_SCHEMA_SQL);
   registerExtraSchema(REMOTE_SCHEMA_SQL);
   registerExtraSchema(WEBAUTHN_SCHEMA_SQL);
 }
@@ -118,6 +136,7 @@ attachChatSignaling(io, users);
 attachSignaling(io, pairing, users, storage);
 attachCallSignaling(io, users, storage);
 attachUserSignaling(io, users, storage);
+attachKhulohSignaling(io, users);
 
 if (USE_POSTGRES) {
   await initDb().catch((e) => {

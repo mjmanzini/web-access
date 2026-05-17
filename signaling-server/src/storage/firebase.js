@@ -128,6 +128,14 @@ function knownContactCollection(db) {
   return db.collection('knownContacts');
 }
 
+function userBlockCollection(db) {
+  return db.collection('userBlocks');
+}
+
+function userReportCollection(db) {
+  return db.collection('userReports');
+}
+
 function mapUserDoc(doc) {
   if (!doc?.exists) return null;
   const data = doc.data() || {};
@@ -170,6 +178,10 @@ function messageReceiptId(messageId, userId) {
 
 function knownContactId(userId, contactUserId) {
   return `${String(userId)}:${String(contactUserId)}`;
+}
+
+function userBlockId(ownerId, contactUserId) {
+  return `${String(ownerId)}:${String(contactUserId)}`;
 }
 
 function mapWebauthnCredentialDoc(doc) {
@@ -363,15 +375,72 @@ export function createFirebaseStorage() {
     const snap = await knownContactCollection(db).where('userId', '==', String(userId)).get();
     const rows = await Promise.all(snap.docs.map(async (doc) => {
       const data = doc.data() || {};
-      const user = await getUserById(db, data.contactUserId);
+      const [user, blockSnap] = await Promise.all([
+        getUserById(db, data.contactUserId),
+        userBlockCollection(db).doc(userBlockId(userId, data.contactUserId)).get(),
+      ]);
       if (!user) return null;
       return {
         ...user,
         reason: data.reason || 'known',
         lastContactAt: coerceDate(data.updatedAt || data.createdAt),
+        blocked: Boolean(blockSnap.data()?.blocked),
       };
     }));
     return rows.filter(Boolean).sort((left, right) => compareDescDates(left.lastContactAt, right.lastContactAt));
+  }
+
+  async function getBlockStatus({ userId, otherUserId }) {
+    const { db } = getFirebaseContext();
+    const [mine, theirs] = await Promise.all([
+      userBlockCollection(db).doc(userBlockId(userId, otherUserId)).get(),
+      userBlockCollection(db).doc(userBlockId(otherUserId, userId)).get(),
+    ]);
+    return {
+      blockedByMe: Boolean(mine.data()?.blocked),
+      blockedByThem: Boolean(theirs.data()?.blocked),
+    };
+  }
+
+  async function setBlocked({ ownerId, contactUserId, blocked }) {
+    const { db } = getFirebaseContext();
+    await userBlockCollection(db).doc(userBlockId(ownerId, contactUserId)).set({
+      ownerId: String(ownerId),
+      contactUserId: String(contactUserId),
+      blocked: !!blocked,
+      updatedAt: nowTimestamp(),
+    }, { merge: true });
+  }
+
+  async function listBlockedUsers(ownerId) {
+    const { db } = getFirebaseContext();
+    const snap = await userBlockCollection(db).where('ownerId', '==', String(ownerId)).get();
+    const rows = await Promise.all(snap.docs.map(async (doc) => {
+      const data = doc.data() || {};
+      if (!data.blocked) return null;
+      const user = await getUserById(db, data.contactUserId);
+      if (!user) return null;
+      return {
+        ...user,
+        blocked: true,
+        blockedAt: coerceDate(data.updatedAt),
+      };
+    }));
+    return rows.filter(Boolean).sort((left, right) => compareDescDates(left.blockedAt, right.blockedAt));
+  }
+
+  async function createUserReport({ reportId, reporterId, reportedUserId, conversationId, reason, details }) {
+    const { db } = getFirebaseContext();
+    await userReportCollection(db).doc(String(reportId)).set({
+      reporterId: String(reporterId),
+      reportedUserId: String(reportedUserId),
+      conversationId: conversationId ? String(conversationId) : null,
+      reason: String(reason),
+      details: details || null,
+      status: 'open',
+      createdAt: nowTimestamp(),
+    });
+    return String(reportId);
   }
 
   async function issueSessionToken({ userId, tokenHash, ttlSeconds }) {
@@ -619,6 +688,9 @@ export function createFirebaseStorage() {
   async function findOrCreateOneToOneConversation({ conversationId, meId, peerId }) {
     const { db } = getFirebaseContext();
     if (String(meId) === String(peerId)) throw new Error('cannot_chat_with_self');
+    const status = await getBlockStatus({ userId: meId, otherUserId: peerId });
+    if (status.blockedByMe) throw new Error('user_blocked');
+    if (status.blockedByThem) throw new Error('blocked_by_user');
     const mappingKey = oneToOneConversationKey(meId, peerId);
     const mappingRef = oneToOneConversationCollection(db).doc(mappingKey);
     const conversationRef = conversationCollection(db).doc(String(conversationId));
@@ -667,6 +739,13 @@ export function createFirebaseStorage() {
     const ids = Array.from(new Set([String(creatorId), ...memberIds.map(String)]));
     if (ids.length < 2) throw new Error('group_needs_members');
     if (ids.length > 256) throw new Error('group_too_large');
+    for (const userId of ids) {
+      if (userId !== String(creatorId)) {
+        const status = await getBlockStatus({ userId: creatorId, otherUserId: userId });
+        if (status.blockedByMe) throw new Error('user_blocked');
+        if (status.blockedByThem) throw new Error('blocked_by_user');
+      }
+    }
 
     const conversationRef = conversationCollection(db).doc(String(conversationId));
     const createdAt = nowTimestamp();
@@ -794,8 +873,23 @@ export function createFirebaseStorage() {
     const createdAt = nowTimestamp();
 
     return db.runTransaction(async (tx) => {
-      const memberSnap = await tx.get(memberRef);
+      const [memberSnap, conversationSnap, memberSnapAll] = await Promise.all([
+        tx.get(memberRef),
+        tx.get(conversationRef),
+        conversationMemberCollection(db).where('conversationId', '==', String(conversationId)).get(),
+      ]);
       if (!memberSnap.exists) throw new Error('forbidden');
+      const conversation = conversationSnap.data() || {};
+      if (!conversation.isGroup) {
+        const peerId = memberSnapAll.docs
+          .map((doc) => String((doc.data() || {}).userId))
+          .find((userId) => userId && userId !== String(senderId));
+        if (peerId) {
+          const status = await getBlockStatus({ userId: senderId, otherUserId: peerId });
+          if (status.blockedByMe) throw new Error('user_blocked');
+          if (status.blockedByThem) throw new Error('blocked_by_user');
+        }
+      }
 
       tx.create(messageRef, {
         conversationId: String(conversationId),
@@ -1017,6 +1111,9 @@ export function createFirebaseStorage() {
       listUsers,
       markKnownContact,
       listKnownContacts,
+      getBlockStatus,
+      setBlocked,
+      listBlockedUsers,
       setUserAvatar,
     },
 
@@ -1052,6 +1149,10 @@ export function createFirebaseStorage() {
       markDelivered,
       markRead,
       touchConversationRead,
+    },
+
+    moderation: {
+      createUserReport,
     },
 
     presence: {

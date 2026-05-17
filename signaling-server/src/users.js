@@ -8,12 +8,20 @@
 import crypto from 'node:crypto';
 import { logEvent } from './db.js';
 import { createStorage } from './storage/index.js';
+import { createInMemoryRateLimiter } from './rate-limit.js';
 
 function randomId(bytes = 6) { return crypto.randomBytes(bytes).toString('hex'); }
 function randomToken() { return crypto.randomBytes(32).toString('base64url'); }
 function sha256(buf) { return crypto.createHash('sha256').update(buf).digest(); }
 function normalizeUsername(u) {
   return String(u || '').trim().toLowerCase().replace(/[^a-z0-9_.-]/g, '');
+}
+
+async function assertDirectInteractionAllowed(storage, meId, otherUserId) {
+  const status = await storage.users.getBlockStatus?.({ userId: meId, otherUserId });
+  if (!status) return;
+  if (status.blockedByMe) throw new Error('user_blocked');
+  if (status.blockedByThem) throw new Error('blocked_by_user');
 }
 
 export class UserRegistry {
@@ -130,6 +138,7 @@ export function attachUserRoutes(app, users) {
 
 /** @param {import('socket.io').Server} io @param {UserRegistry} users */
 export function attachUserSignaling(io, users, storage = createStorage()) {
+  const callRateLimiter = createInMemoryRateLimiter({ windowMs: 60 * 1000, max: 6 });
   io.on('connection', (socket) => {
     /** @type {string|null} */
     let authedUserId = null;
@@ -147,9 +156,20 @@ export function attachUserSignaling(io, users, storage = createStorage()) {
 
     socket.on('user:call', async ({ toUserId, roomId } = {}, ack) => {
       if (!authedUserId) { ack?.({ ok: false, error: 'not_authed' }); return; }
+      const callBudget = callRateLimiter.consume(authedUserId);
+      if (!callBudget.allowed) {
+        ack?.({ ok: false, error: 'call_rate_limited', retryAfterSeconds: Math.max(1, Math.ceil(callBudget.retryAfterMs / 1000)) });
+        return;
+      }
       const me = await users.getById(authedUserId);
       const target = await users.getById(toUserId);
       if (!me || !target) { ack?.({ ok: false, error: 'unknown_user' }); return; }
+      try {
+        await assertDirectInteractionAllowed(storage, me.id, target.id);
+      } catch (error) {
+        ack?.({ ok: false, error: error.message });
+        return;
+      }
       const sockets = users.socketsOf(target.id);
       if (sockets.length === 0) { ack?.({ ok: false, error: 'user_offline' }); return; }
       const assignedRoom = String(roomId || '').trim() || `dm-${me.id}-${target.id}-${Date.now().toString(36)}`;

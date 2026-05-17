@@ -106,6 +106,7 @@ export class ChatClient {
     receipt:  new Set<(r: { messageId: string; userId: string; kind: 'delivered'|'read' }) => void>(),
     presence: new Set<(p: { userId: string } & Presence) => void>(),
     typing:   new Set<(t: { conversationId: string; userId: string; typing: boolean }) => void>(),
+    error:    new Set<(e: { conversationId?: string; clientId?: string | null; error: string }) => void>(),
   };
 
   constructor(url: string, token: string) {
@@ -123,6 +124,7 @@ export class ChatClient {
     this.sock.on('receipt',  (r) => this.listeners.receipt.forEach(f => f(r)));
     this.sock.on('presence', (p) => this.listeners.presence.forEach(f => f(p)));
     this.sock.on('typing',   (t) => this.listeners.typing.forEach(f => f(t)));
+    this.sock.on('send_error', (e) => this.listeners.error.forEach(f => f(e)));
   }
 
   send(conversationId: string, body: string): string {
@@ -149,6 +151,9 @@ export class ChatClient {
   }
   onTyping(f: (t: { conversationId: string; userId: string; typing: boolean }) => void) {
     this.listeners.typing.add(f); return () => this.listeners.typing.delete(f);
+  }
+  onError(f: (e: { conversationId?: string; clientId?: string | null; error: string }) => void) {
+    this.listeners.error.add(f); return () => this.listeners.error.delete(f);
   }
 
   disconnect() { this.sock.disconnect(); }

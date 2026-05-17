@@ -1,6 +1,28 @@
 import { pool } from '../db.js';
 
 export function createPostgresStorage() {
+  async function getBlockStatus({ userId, otherUserId }) {
+    const { rows } = await pool.query(
+      `SELECT
+         COALESCE(MAX(CASE WHEN owner_id = $1 AND contact_id = $2 AND blocked THEN 1 ELSE 0 END), 0)::int AS "blockedByMe",
+         COALESCE(MAX(CASE WHEN owner_id = $2 AND contact_id = $1 AND blocked THEN 1 ELSE 0 END), 0)::int AS "blockedByThem"
+         FROM contacts
+        WHERE (owner_id = $1 AND contact_id = $2)
+           OR (owner_id = $2 AND contact_id = $1)`,
+      [String(userId), String(otherUserId)],
+    );
+    return {
+      blockedByMe: Boolean(rows[0]?.blockedByMe),
+      blockedByThem: Boolean(rows[0]?.blockedByThem),
+    };
+  }
+
+  async function assertDirectInteractionAllowed({ userId, otherUserId }) {
+    const status = await getBlockStatus({ userId, otherUserId });
+    if (status.blockedByMe) throw new Error('user_blocked');
+    if (status.blockedByThem) throw new Error('blocked_by_user');
+  }
+
   return {
     users: {
       async createUser({ id, username, displayName, token }) {
@@ -93,12 +115,42 @@ export function createPostgresStorage() {
         const { rows } = await pool.query(
           `SELECT u.id, u.username, u.display_name AS "displayName",
                   lower(u.email) AS "emailLower", u.avatar_url AS "avatarUrl",
-                  kc.reason, kc.updated_at AS "lastContactAt"
+                  kc.reason, kc.updated_at AS "lastContactAt",
+                  COALESCE(c.blocked, false) AS blocked
              FROM known_contacts kc
              JOIN users u ON u.id = kc.contact_user_id
+        LEFT JOIN contacts c ON c.owner_id = kc.user_id AND c.contact_id = kc.contact_user_id
             WHERE kc.user_id = $1
             ORDER BY kc.updated_at DESC`,
           [userId],
+        );
+        return rows;
+      },
+
+      async getBlockStatus({ userId, otherUserId }) {
+        return getBlockStatus({ userId, otherUserId });
+      },
+
+      async setBlocked({ ownerId, contactUserId, blocked }) {
+        await pool.query(
+          `INSERT INTO contacts (owner_id, contact_id, blocked)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (owner_id, contact_id)
+           DO UPDATE SET blocked = EXCLUDED.blocked`,
+          [String(ownerId), String(contactUserId), !!blocked],
+        );
+      },
+
+      async listBlockedUsers(ownerId) {
+        const { rows } = await pool.query(
+          `SELECT u.id, u.username, u.display_name AS "displayName",
+                  lower(u.email) AS "emailLower", u.avatar_url AS "avatarUrl",
+                  true AS blocked, c.created_at AS "blockedAt"
+             FROM contacts c
+             JOIN users u ON u.id = c.contact_id
+            WHERE c.owner_id = $1 AND c.blocked = true
+            ORDER BY c.created_at DESC`,
+          [String(ownerId)],
         );
         return rows;
       },
@@ -330,6 +382,7 @@ export function createPostgresStorage() {
 
     chat: {
       async findOrCreateOneToOneConversation({ conversationId, meId, peerId }) {
+        await assertDirectInteractionAllowed({ userId: meId, otherUserId: peerId });
         const { rows } = await pool.query(
           `SELECT c.id FROM conversations c
              JOIN conversation_members m1 ON m1.conversation_id=c.id AND m1.user_id=$1
@@ -365,6 +418,11 @@ export function createPostgresStorage() {
         const ids = Array.from(new Set([String(creatorId), ...memberIds.map(String)]));
         if (ids.length < 2) throw new Error('group_needs_members');
         if (ids.length > 256) throw new Error('group_too_large');
+        for (const userId of ids) {
+          if (userId !== String(creatorId)) {
+            await assertDirectInteractionAllowed({ userId: creatorId, otherUserId: userId });
+          }
+        }
         const cleanTitle = String(title || '').trim().slice(0, 80) || null;
         const client = await pool.connect();
         try {
@@ -449,6 +507,23 @@ export function createPostgresStorage() {
           if (!membershipRows[0]) throw new Error('forbidden');
 
           const { rows } = await client.query(
+            `SELECT c.is_group AS "isGroup", cm.user_id AS "userId"
+               FROM conversations c
+               JOIN conversation_members cm ON cm.conversation_id = c.id
+              WHERE c.id = $1`,
+            [conversationId],
+          );
+          if (!rows.length) throw new Error('forbidden');
+          if (!rows[0].isGroup) {
+            const peerId = rows.find((row) => row.userId !== String(senderId))?.userId;
+            if (peerId) {
+              const status = await getBlockStatus({ userId: senderId, otherUserId: peerId });
+              if (status.blockedByMe) throw new Error('user_blocked');
+              if (status.blockedByThem) throw new Error('blocked_by_user');
+            }
+          }
+
+          const { rows: insertedRows } = await client.query(
             `INSERT INTO chat_messages_v2 (id, conversation_id, sender_id, body, client_id)
              VALUES ($1,$2,$3,$4,$5)
              RETURNING id, conversation_id AS "conversationId", sender_id AS "senderId",
@@ -460,7 +535,7 @@ export function createPostgresStorage() {
             [conversationId],
           );
           await client.query('COMMIT');
-          return rows[0];
+          return insertedRows[0];
         } catch (error) {
           await client.query('ROLLBACK').catch(() => {});
           throw error;
@@ -504,6 +579,24 @@ export function createPostgresStorage() {
             WHERE conversation_id=$1 AND user_id=$2`,
           [conversationId, userId],
         );
+      },
+    },
+
+    moderation: {
+      async createUserReport({ reportId, reporterId, reportedUserId, conversationId, reason, details }) {
+        await pool.query(
+          `INSERT INTO user_reports (id, reporter_id, reported_user_id, conversation_id, reason, details)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [
+            String(reportId),
+            String(reporterId),
+            String(reportedUserId),
+            conversationId ? String(conversationId) : null,
+            String(reason),
+            details || null,
+          ],
+        );
+        return String(reportId);
       },
     },
 

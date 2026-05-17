@@ -26,8 +26,38 @@ import { logEvent } from '../db.js';
 import { socketAuth } from '../auth/sessions.js';
 import { sendContactInviteEmail } from '../email/mailer.js';
 import { createStorage } from '../storage/index.js';
+import { createInMemoryRateLimiter, createRateLimitMiddleware } from '../rate-limit.js';
+import { evaluateMessage as scamShieldEvaluate, buildBlockNotice as scamShieldBlockNotice } from '../khuloh/scam-shield.js';
+
+const E2E_PREFIX = 'wae2e:v1:';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+export const SAFETY_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS contacts (
+  owner_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  contact_id  TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  nickname    TEXT,
+  favorite    BOOLEAN NOT NULL DEFAULT false,
+  blocked     BOOLEAN NOT NULL DEFAULT false,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (owner_id, contact_id),
+  CHECK (owner_id <> contact_id)
+);
+
+CREATE TABLE IF NOT EXISTS user_reports (
+  id                TEXT PRIMARY KEY,
+  reporter_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  reported_user_id  TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  conversation_id   TEXT REFERENCES conversations(id) ON DELETE SET NULL,
+  reason            TEXT NOT NULL,
+  details           TEXT,
+  status            TEXT NOT NULL DEFAULT 'open',
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (reporter_id <> reported_user_id)
+);
+CREATE INDEX IF NOT EXISTS user_reports_reported_idx ON user_reports(reported_user_id, created_at DESC);
+`;
 
 export const CHAT_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS conversations (
@@ -72,6 +102,19 @@ CREATE TABLE IF NOT EXISTS message_receipts (
 
 function uid() {
   return crypto.randomBytes(8).toString('hex');
+}
+
+function interactionStatusCode(message) {
+  if (message === 'user_blocked' || message === 'blocked_by_user') return 409;
+  if (message === 'forbidden') return 403;
+  return 400;
+}
+
+async function assertDirectInteractionAllowed(storage, meId, peerId) {
+  const status = await storage.users.getBlockStatus?.({ userId: meId, otherUserId: peerId });
+  if (!status) return;
+  if (status.blockedByMe) throw new Error('user_blocked');
+  if (status.blockedByThem) throw new Error('blocked_by_user');
 }
 
 async function findOrCreate1to1(storage, meId, peerId) {
@@ -134,6 +177,22 @@ function buildInviteUrl({ displayName, email, inviterName }) {
 }
 
 export function attachChatRoutes(app, requireAuth, storage = createStorage()) {
+  const conversationCreateRateLimit = createRateLimitMiddleware({
+    windowMs: 60 * 1000,
+    max: 12,
+    error: 'conversation_rate_limited',
+  });
+  const contactInviteRateLimit = createRateLimitMiddleware({
+    windowMs: 10 * 60 * 1000,
+    max: 8,
+    error: 'invite_rate_limited',
+  });
+  const reportRateLimit = createRateLimitMiddleware({
+    windowMs: 10 * 60 * 1000,
+    max: 12,
+    error: 'report_rate_limited',
+  });
+
   app.get('/api/conversations', requireAuth, async (req, res) => {
     try {
       res.json({ conversations: await listConversations(storage, req.user.id) });
@@ -142,7 +201,7 @@ export function attachChatRoutes(app, requireAuth, storage = createStorage()) {
     }
   });
 
-  app.post('/api/conversations', requireAuth, async (req, res) => {
+  app.post('/api/conversations', requireAuth, conversationCreateRateLimit, async (req, res) => {
     const { peerUserId, memberIds, title } = req.body || {};
 
     // Group conversation: caller passes memberIds[]
@@ -152,6 +211,9 @@ export function attachChatRoutes(app, requireAuth, storage = createStorage()) {
         .filter((id) => id && id !== req.user.id);
       if (cleanMembers.length < 1) return res.status(400).json({ error: 'group_needs_members' });
       try {
+        for (const memberId of cleanMembers) {
+          await assertDirectInteractionAllowed(storage, req.user.id, memberId);
+        }
         const id = await storage.chat.createGroupConversation({
           conversationId: uid(),
           creatorId: req.user.id,
@@ -167,7 +229,7 @@ export function attachChatRoutes(app, requireAuth, storage = createStorage()) {
         }
         return res.json({ id, isGroup: true });
       } catch (e) {
-        return res.status(400).json({ error: e.message });
+        return res.status(interactionStatusCode(e.message)).json({ error: e.message });
       }
     }
 
@@ -177,7 +239,7 @@ export function attachChatRoutes(app, requireAuth, storage = createStorage()) {
       await storage.users.markKnownContact?.({ userId: req.user.id, contactUserId: peerUserId, reason: 'chat' }).catch(() => {});
       res.json({ id });
     } catch (e) {
-      res.status(400).json({ error: e.message });
+      res.status(interactionStatusCode(e.message)).json({ error: e.message });
     }
   });
 
@@ -202,7 +264,7 @@ export function attachChatRoutes(app, requireAuth, storage = createStorage()) {
     }
   });
 
-  app.post('/api/contacts/invite', requireAuth, async (req, res) => {
+  app.post('/api/contacts/invite', requireAuth, contactInviteRateLimit, async (req, res) => {
     const displayName = normalizeInviteName(req.body?.displayName);
     const email = normalizeInviteEmail(req.body?.email);
     if (displayName.length < 2) return res.status(400).json({ error: 'invalid_display_name' });
@@ -245,6 +307,63 @@ export function attachChatRoutes(app, requireAuth, storage = createStorage()) {
     }
   });
 
+  app.get('/api/contacts/blocked', requireAuth, async (req, res) => {
+    try {
+      const contacts = await storage.users.listBlockedUsers?.(req.user.id).catch(() => []) || [];
+      res.json({ contacts });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/contacts/:contactId/block', requireAuth, async (req, res) => {
+    const contactId = String(req.params.contactId || '').trim();
+    const blocked = req.body?.blocked !== false;
+    if (!contactId || contactId === req.user.id) {
+      return res.status(400).json({ error: 'invalid_contact' });
+    }
+    try {
+      await storage.users.setBlocked?.({ ownerId: req.user.id, contactUserId: contactId, blocked });
+      logEvent(blocked ? 'contact_blocked' : 'contact_unblocked', {
+        userId: req.user.id,
+        payload: { contactId },
+      });
+      res.json({ ok: true, blocked });
+    } catch (e) {
+      res.status(500).json({ error: e.message || 'block_failed' });
+    }
+  });
+
+  app.post('/api/reports/users', requireAuth, reportRateLimit, async (req, res) => {
+    const reportedUserId = String(req.body?.reportedUserId || '').trim();
+    const reason = String(req.body?.reason || '').trim().slice(0, 120);
+    const details = String(req.body?.details || '').trim().slice(0, 4000) || null;
+    const conversationId = req.body?.conversationId ? String(req.body.conversationId).trim() : null;
+    if (!reportedUserId || reportedUserId === req.user.id) {
+      return res.status(400).json({ error: 'invalid_reported_user' });
+    }
+    if (reason.length < 3) {
+      return res.status(400).json({ error: 'invalid_reason' });
+    }
+    try {
+      const id = await storage.moderation.createUserReport?.({
+        reportId: uid(),
+        reporterId: req.user.id,
+        reportedUserId,
+        conversationId,
+        reason,
+        details,
+      });
+      logEvent('user_reported', {
+        userId: req.user.id,
+        payload: { reportedUserId, reason, conversationId },
+      });
+      res.status(201).json({ id });
+    } catch (e) {
+      res.status(500).json({ error: e.message || 'report_failed' });
+    }
+  });
+
   app.get('/api/conversations/:id/messages', requireAuth, async (req, res) => {
     try {
       const { before, limit } = req.query;
@@ -260,6 +379,7 @@ export function attachChatRoutes(app, requireAuth, storage = createStorage()) {
 export function attachChatSignaling(io, users, storage = createStorage()) {
   const nsp = io.of('/chat');
   nsp.use(socketAuth(users));
+  const sendRateLimiter = createInMemoryRateLimiter({ windowMs: 10 * 1000, max: 20 });
 
   nsp.on('connection', (socket) => {
     const me = socket.data.user;
@@ -273,6 +393,37 @@ export function attachChatSignaling(io, users, storage = createStorage()) {
 
     socket.on('send', async ({ conversationId, body, clientId } = {}, ack) => {
       try {
+        const sendBudget = sendRateLimiter.consume(me.id);
+        if (!sendBudget.allowed) {
+          const retryAfterSeconds = Math.max(1, Math.ceil(sendBudget.retryAfterMs / 1000));
+          ack?.({ ok: false, error: 'message_rate_limited', retryAfterSeconds });
+          socket.emit('send_error', {
+            conversationId,
+            clientId: clientId || null,
+            error: 'message_rate_limited',
+            retryAfterSeconds,
+          });
+          return;
+        }
+        // Khuloh Scam-Shield runs only on plaintext bodies; E2E-encrypted
+        // messages skip the filter (cannot be inspected server-side).
+        if (typeof body === 'string' && !body.startsWith(E2E_PREFIX)) {
+          const verdict = scamShieldEvaluate(body);
+          if (verdict.action === 'block') {
+            logEvent('khuloh_scam_blocked', { userId: me.id, conversationId, reasons: verdict.reasons });
+            ack?.({ ok: false, error: 'scam_blocked', notice: scamShieldBlockNotice() });
+            socket.emit('send_error', {
+              conversationId,
+              clientId: clientId || null,
+              error: 'scam_blocked',
+              notice: scamShieldBlockNotice(),
+            });
+            return;
+          }
+          if (verdict.action === 'flag') {
+            logEvent('khuloh_scam_flagged', { userId: me.id, conversationId, reasons: verdict.reasons });
+          }
+        }
         const msg = await persistMessage(storage, { conversationId, senderId: me.id, body, clientId });
         const recipients = (await membersOf(storage, conversationId)).filter((userId) => userId !== me.id);
 
@@ -290,6 +441,11 @@ export function attachChatSignaling(io, users, storage = createStorage()) {
         }
       } catch (e) {
         ack?.({ ok: false, error: e.message });
+        socket.emit('send_error', {
+          conversationId,
+          clientId: clientId || null,
+          error: e.message,
+        });
       }
     });
 
