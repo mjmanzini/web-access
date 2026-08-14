@@ -1,11 +1,12 @@
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { api } from '../api/client';
-import type { Device, Profile } from '../api/types';
+import type { Device, DnsSetup, Profile } from '../api/types';
 
 export default function Devices() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [busy, setBusy] = useState(false);
+  const [setup, setSetup] = useState<{ id: string; data: DnsSetup } | null>(null);
 
   const load = () => {
     api.devices().then(setDevices).catch(() => {});
@@ -31,6 +32,11 @@ export default function Devices() {
     await api.updateDevice(d.id, { blocked: !d.blocked });
     load();
   };
+  const showSetup = async (id: string) => {
+    if (setup?.id === id) return setSetup(null);
+    const data = await api.dnsSetup(id);
+    setSetup({ id, data });
+  };
 
   return (
     <>
@@ -43,39 +49,54 @@ export default function Devices() {
         <table>
           <thead>
             <tr>
-              <th>Device</th><th>IP</th><th>MAC</th><th>Profile</th><th>Status</th><th></th>
+              <th>Device</th><th>IP</th><th>Identity</th><th>Profile</th><th>Status</th><th></th>
             </tr>
           </thead>
           <tbody>
             {devices.map((d) => (
-              <tr key={d.id}>
-                <td>
-                  <span className={`dot ${d.isOnline ? 'on' : 'off'}`} /> {d.name}
-                </td>
-                <td className="muted">{d.ipAddress}</td>
-                <td className="muted">
-                  {d.macAddress ?? '—'}{' '}
-                  {d.macRandomized && <span className="badge warn">randomized</span>}
-                </td>
-                <td>
-                  <select value={d.profileId ?? ''} onChange={(e) => assign(d.id, e.target.value)}>
-                    <option value="">Unassigned</option>
-                    {profiles.map((p) => (
-                      <option key={p.id} value={p.id}>{p.name}</option>
-                    ))}
-                  </select>
-                </td>
-                <td>
-                  {d.blocked
-                    ? <span className="badge danger">blocked</span>
-                    : <span className="badge ok">allowed</span>}
-                </td>
-                <td>
-                  <button className={d.blocked ? 'ghost' : 'danger'} onClick={() => toggleBlock(d)}>
-                    {d.blocked ? 'Unblock' : 'Block'}
-                  </button>
-                </td>
-              </tr>
+              <Fragment key={d.id}>
+                <tr>
+                  <td>
+                    <span className={`dot ${d.isOnline ? 'on' : 'off'}`} /> {d.name}
+                  </td>
+                  <td className="muted">{d.ipAddress}</td>
+                  <td>
+                    {/* Stable identity = ClientID present and MAC not randomized. */}
+                    {d.macRandomized && !d.clientId ? (
+                      <span className="badge warn" title="Randomized MAC and no ClientID — controls may drift">IP-only</span>
+                    ) : (
+                      <span className="badge ok" title={d.clientId ?? ''}>stable</span>
+                    )}{' '}
+                    {d.macRandomized && <span className="badge warn">rnd MAC</span>}
+                  </td>
+                  <td>
+                    <select value={d.profileId ?? ''} onChange={(e) => assign(d.id, e.target.value)}>
+                      <option value="">Unassigned</option>
+                      {profiles.map((p) => (
+                        <option key={p.id} value={p.id}>{p.name}</option>
+                      ))}
+                    </select>
+                  </td>
+                  <td>
+                    {d.blocked
+                      ? <span className="badge danger">blocked</span>
+                      : <span className="badge ok">allowed</span>}
+                  </td>
+                  <td className="row" style={{ justifyContent: 'flex-end' }}>
+                    <button className="ghost" onClick={() => showSetup(d.id)}>DNS setup</button>
+                    <button className={d.blocked ? 'ghost' : 'danger'} onClick={() => toggleBlock(d)}>
+                      {d.blocked ? 'Unblock' : 'Block'}
+                    </button>
+                  </td>
+                </tr>
+                {setup?.id === d.id && (
+                  <tr>
+                    <td colSpan={6} style={{ background: 'var(--panel-2)' }}>
+                      <SetupPanel data={setup.data} />
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
             ))}
             {!devices.length && (
               <tr><td colSpan={6} className="muted">No devices yet — run a network scan.</td></tr>
@@ -84,5 +105,38 @@ export default function Devices() {
         </table>
       </div>
     </>
+  );
+}
+
+/** Per-device encrypted-DNS setup so its ClientID travels with every query. */
+function SetupPanel({ data }: { data: DnsSetup }) {
+  return (
+    <div className="grid" style={{ gap: 6, padding: '4px 0' }}>
+      <div className="muted" style={{ fontSize: 12 }}>
+        ClientID <code>{data.clientId}</code> — set one of these as the device's
+        private DNS so its controls follow it across networks & IP changes.
+      </div>
+      {data.domainConfigured ? (
+        <>
+          <Field label="DoT (Android Private DNS)" value={data.dot!} />
+          <Field label="DoH (browsers / Apple config)" value={data.doh!} />
+          <Field label="DoQ" value={data.doq!} />
+        </>
+      ) : (
+        <div className="badge warn">
+          Set ADGUARD_DNS_DOMAIN to your AdGuard server's public hostname to
+          enable DoT/DoH endpoints. Until then, identity falls back to MAC/IP.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Field({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="row">
+      <span className="muted" style={{ fontSize: 12, width: 210 }}>{label}</span>
+      <code style={{ userSelect: 'all' }}>{value}</code>
+    </div>
   );
 }

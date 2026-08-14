@@ -26,6 +26,16 @@ export class Device {
   @Column({ length: 160 })
   name: string;
 
+  /**
+   * Stable AdGuard ClientID — an IP-independent anchor the device embeds in its
+   * encrypted-DNS (DoT/DoH/DoQ) endpoint. This is the durable identity that keeps
+   * policy/pause attached to the right device across IP changes and MAC
+   * randomization. Nullable only for rows created before this column existed;
+   * backfilled on boot and always set on new devices.
+   */
+  @Column({ type: 'varchar', unique: true, nullable: true })
+  clientId: string | null;
+
   @Index()
   @Column({ nullable: true })
   ipAddress: string;

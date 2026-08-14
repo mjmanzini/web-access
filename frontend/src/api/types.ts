@@ -18,6 +18,7 @@ export interface Profile {
 export interface Device {
   id: string;
   name: string;
+  clientId: string | null;
   ipAddress: string;
   macAddress: string | null;
   macRandomized: boolean;
@@ -26,6 +27,14 @@ export interface Device {
   lastSeenAt: string | null;
   blocked: boolean;
   profileId: string | null;
+}
+
+export interface DnsSetup {
+  clientId: string;
+  domainConfigured: boolean;
+  dot: string | null;
+  doh: string | null;
+  doq: string | null;
 }
 
 export interface Rule {

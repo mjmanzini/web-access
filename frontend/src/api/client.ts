@@ -1,6 +1,7 @@
 import type {
   ActivityLog,
   Device,
+  DnsSetup,
   Profile,
   Rule,
 } from './types';
@@ -50,6 +51,7 @@ export const api = {
 
   // devices
   devices: () => request<Device[]>('/devices'),
+  dnsSetup: (id: string) => request<DnsSetup>(`/devices/${id}/dns-setup`),
   syncDevices: () => request<{ discovered: number; created: number }>('/devices/sync', { method: 'POST' }),
   updateDevice: (id: string, body: Partial<Device>) =>
     request<Device>(`/devices/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),

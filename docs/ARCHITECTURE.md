@@ -101,7 +101,31 @@ to AdGuard, and block known VPN ports/DoH IP ranges. That belongs to a future
 **OpenWrt provider** implementing the same `NetworkProvider` interface; the
 architecture already has the seam for it.
 
-## 4. Security & data retention
+## 4. Device identity (why controls don't drift)
+
+Parental controls are only as good as the appliance's ability to keep attaching
+a policy to the *same* device. Three identifiers, most-stable first, are emitted
+for every device (`ProfilesService.identifiersFor`) and used both as AdGuard
+client `ids` and in the hard-block (disallowed-clients) list:
+
+1. **ClientID** — a stable slug (`Device.clientId`) the device embeds in its
+   encrypted-DNS endpoint (DoT/DoH/DoQ). Fully IP-independent and immune to MAC
+   randomization. `GET /api/devices/:id/dns-setup` returns the DoT/DoH/DoQ URLs
+   (built from `ADGUARD_DNS_DOMAIN` + the ClientID) to configure on the device.
+   This is the gold-standard anchor.
+2. **MAC** — used when non-randomized; reliable when AdGuard is your DHCP server
+   (it then knows IP↔MAC). A **randomized** ("private") MAC is skipped as an
+   identifier and flagged in the UI, because it isn't stable.
+3. **IP** — last-resort fallback for plain-DNS LANs; churns with DHCP, so it's
+   only ever additive, never the sole anchor.
+
+Emitting all three means enforcement holds however the device currently reaches
+AdGuard. The dashboard marks a device **stable** once it has a ClientID (or a
+real MAC) and **IP-only** when it has neither, so you can see which devices can
+still slip controls. New devices get a ClientID on discovery; older rows are
+backfilled on boot.
+
+## 5. Security & data retention
 
 - **Auth (fail-closed).** A global `JwtAuthGuard` (`APP_GUARD`) requires a valid
   Bearer JWT on every route except those marked `@Public()` (login, health). The
@@ -116,7 +140,7 @@ architecture already has the seam for it.
   rows. Recent detail stays queryable; long-range history lives in the rollups
   (`GET /api/activity/history`), and the raw table stays bounded.
 
-## 5. Extending
+## 6. Extending
 
 - **New enforcement backend:** implement `NetworkProvider`, bind it in
   `network.module.ts`. Nothing else changes.

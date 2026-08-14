@@ -14,7 +14,9 @@ on your own hardware.
 
 - **Device discovery & profiling** — track devices by IP/MAC, flag randomized
   ("private") MACs that evade controls, and group devices under one **User
-  Profile** (a child's phone + tablet + console).
+  Profile** (a child's phone + tablet + console). Each device gets a stable
+  **AdGuard ClientID** so its controls follow it across IP changes and MAC
+  randomization (per-device DoT/DoH setup on the Devices page).
 - **Activity & bandwidth monitoring** — DNS queries, top domains, active hours,
   per-device/-profile history from the AdGuard query log.
 - **Parental controls** — instant block/unblock of domains and categories

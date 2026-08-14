@@ -138,17 +138,24 @@ export class ProfilesService {
       for (const id of this.identifiersFor(p.devices ?? [])) identifiers.add(id);
     }
     for (const d of blockedDevices) {
+      if (d.clientId) identifiers.add(d.clientId);
+      if (d.macAddress && !d.macRandomized) identifiers.add(d.macAddress);
       if (d.ipAddress) identifiers.add(d.ipAddress);
-      if (d.macAddress) identifiers.add(d.macAddress);
     }
     await this.network.setBlockedClientIdentifiers([...identifiers]);
   }
 
-  /** Prefer stable MAC ids; fall back to current IP. */
+  /**
+   * Build the AdGuard client identifiers for a set of devices, most-stable
+   * first: the ClientID (IP-independent, survives MAC randomization), then a
+   * non-randomized MAC, then the current IP as a last-resort fallback. Including
+   * all three means enforcement holds however the device is currently reaching
+   * AdGuard (encrypted DNS with a ClientID, or plain DNS by IP/MAC).
+   */
   private identifiersFor(devices: Device[]): string[] {
     const ids: string[] = [];
     for (const d of devices) {
-      // A randomized MAC is not stable, so pin by IP for those.
+      if (d.clientId) ids.push(d.clientId); // durable anchor
       if (d.macAddress && !d.macRandomized) ids.push(d.macAddress);
       if (d.ipAddress) ids.push(d.ipAddress);
     }

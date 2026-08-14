@@ -53,6 +53,9 @@ services:
       ADGUARD_URL: http://adguardhome:80
       ADGUARD_USERNAME: ${ADGUARD_USERNAME:-admin}
       ADGUARD_PASSWORD: ${ADGUARD_PASSWORD:?set ADGUARD_PASSWORD in .env (never commit it)}
+      # Public DNS hostname of your AdGuard server (for per-device DoT/DoH
+      # ClientID endpoints). Optional; leave blank to skip encrypted-DNS setup.
+      ADGUARD_DNS_DOMAIN: ${ADGUARD_DNS_DOMAIN:-}
       # Dashboard auth: JWT signing secret + the seeded parent admin login.
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (never commit it)}
       AUTH_ADMIN_USERNAME: ${AUTH_ADMIN_USERNAME:-admin}
