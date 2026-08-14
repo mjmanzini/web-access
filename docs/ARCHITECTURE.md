@@ -170,8 +170,11 @@ own `fw4` ruleset. Everything is best-effort and defensive: a router blip
 degrades to empty results, never a crash. Requires `uhttpd-mod-ubus`, rpcd `file`
 (read/exec) ACLs for the API user, and `nlbwmon` for bandwidth — see README.
 
-Adding a different router (pfSense, EdgeOS, …) is one new class implementing
-`RouterProvider` plus a branch in `router.module.ts`.
+Two drivers ship today, selected by `ROUTER_PROVIDER`: **`openwrt`** (full — ubus
++ nftables) and **`huawei`** (partial — a HiLink LTE CPE like the B525, via its
+XML API with SCRAM login: device discovery + per-device Wi-Fi MAC-block cutoff,
+but no bandwidth or containment). Adding another router (pfSense, EdgeOS, …) is
+one new class implementing `RouterProvider` plus a branch in `router.module.ts`.
 
 ## 7. Extending
 
