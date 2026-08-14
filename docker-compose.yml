@@ -12,7 +12,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-guardian}
       POSTGRES_USER: ${POSTGRES_USER:-guardian}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-guardian}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (never commit it)}
     volumes:
       - pg_data:/var/lib/postgresql/data
     healthcheck:
@@ -49,10 +49,10 @@ services:
       POSTGRES_PORT: 5432
       POSTGRES_DB: ${POSTGRES_DB:-guardian}
       POSTGRES_USER: ${POSTGRES_USER:-guardian}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-guardian}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (never commit it)}
       ADGUARD_URL: http://adguardhome:80
       ADGUARD_USERNAME: ${ADGUARD_USERNAME:-admin}
-      ADGUARD_PASSWORD: ${ADGUARD_PASSWORD:-changeme}
+      ADGUARD_PASSWORD: ${ADGUARD_PASSWORD:?set ADGUARD_PASSWORD in .env (never commit it)}
       CORS_ORIGIN: ${CORS_ORIGIN:-*}
       ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
     ports:
@@ -74,6 +74,9 @@ services:
     profiles: ["cloudflare"]
     command: tunnel --no-autoupdate run
     environment:
+      # Provided by the Cloudflare Tunnel (Zero Trust dashboard), kept in .env on
+      # the host — never committed. Optional here so the base stack runs without
+      # it; required only when you enable this `cloudflare` profile.
       TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
     depends_on:
       - web

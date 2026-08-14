@@ -15,7 +15,9 @@ export function buildTypeOrmOptions(
     host: config.get<string>('POSTGRES_HOST', 'postgres'),
     port: config.get<number>('POSTGRES_PORT', 5432),
     username: config.get<string>('POSTGRES_USER', 'guardian'),
-    password: config.get<string>('POSTGRES_PASSWORD', 'guardian'),
+    // No default: the password must come from the environment (.env on the home
+    // server, or the host's secret store) — never hardcoded in the repo.
+    password: config.get<string>('POSTGRES_PASSWORD'),
     database: config.get<string>('POSTGRES_DB', 'guardian'),
     autoLoadEntities: true,
     synchronize: !isProd,

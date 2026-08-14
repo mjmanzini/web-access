@@ -38,9 +38,15 @@ on your own hardware.
 ## Quick start (local / home server)
 
 ```bash
-cp .env.example .env      # set strong POSTGRES_PASSWORD + ADGUARD_PASSWORD
+cp .env.example .env
+# Fill in the required secrets (see "Configuration & secrets" below):
+#   POSTGRES_PASSWORD=$(openssl rand -base64 24)
+#   ADGUARD_PASSWORD=$(openssl rand -base64 24)
 docker compose up -d --build
 ```
+
+Compose fails fast if the required secrets aren't set — there are no baked-in
+default passwords.
 
 Then:
 
@@ -69,11 +75,31 @@ cd frontend && npm install && npm run dev           # http://localhost:5173
 The backend expects a reachable Postgres and AdGuard; the fastest path is
 `docker compose up -d postgres adguardhome` and running the apps against them.
 
+## Configuration & secrets
+
+No secrets are committed to this repo — `.env` is gitignored and
+[`.env.example`](.env.example) ships with blank secret values. Where each secret
+lives:
+
+| Secret | Used by | Where it lives |
+|--------|---------|----------------|
+| `POSTGRES_PASSWORD` | API ↔ Postgres | `.env` on the home server only |
+| `ADGUARD_PASSWORD` | API ↔ AdGuard control API | `.env` on the home server only |
+| `TUNNEL_TOKEN` | Cloudflare Tunnel | Cloudflare Zero Trust dashboard → `.env` on the host |
+| `VITE_API_BASE` | Dashboard → API URL | Cloudflare Pages build env var (not a secret) |
+
+`docker-compose.yml` references these via `${VAR:?…}` for the required ones, so
+the stack refuses to start rather than fall back to a weak default. To rotate a
+password, update `.env` and `docker compose up -d` (and the AdGuard admin user in
+its UI for `ADGUARD_PASSWORD`).
+
 ## Remote access with Cloudflare
 
 Host the dashboard on **Cloudflare Pages** and reach the home API through a
-**Cloudflare Tunnel** (no open router ports), gated by **Cloudflare Access** —
-see [infra/cloudflare/README.md](infra/cloudflare/README.md).
+**Cloudflare Tunnel** (no open router ports), gated by **Cloudflare Access**.
+Secrets stay out of the repo: the tunnel token comes from the Cloudflare Zero
+Trust dashboard, and the dashboard's API URL is a Pages build variable
+(`VITE_API_BASE`). Full steps: [infra/cloudflare/README.md](infra/cloudflare/README.md).
 
 ## Project layout
 
