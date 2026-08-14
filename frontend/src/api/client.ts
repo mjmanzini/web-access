@@ -1,8 +1,10 @@
 import type {
   ActivityLog,
+  BandwidthRow,
   Device,
   DnsSetup,
   Profile,
+  RouterStatus,
   Rule,
 } from './types';
 import { auth } from './auth';
@@ -65,4 +67,13 @@ export const api = {
   // activity
   activity: (limit = 100) => request<ActivityLog[]>(`/activity?limit=${limit}`),
   networkStatus: () => request<{ running: boolean; version: string | null }>('/network/status'),
+
+  // router + bandwidth
+  bandwidth: () => request<BandwidthRow[]>('/bandwidth'),
+  routerStatus: () => request<RouterStatus>('/router/status'),
+  applyContainment: () =>
+    request<{ applied: boolean; rules: string[] }>('/router/containment', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
 };

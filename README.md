@@ -17,11 +17,14 @@ on your own hardware.
   Profile** (a child's phone + tablet + console). Each device gets a stable
   **AdGuard ClientID** so its controls follow it across IP changes and MAC
   randomization (per-device DoT/DoH setup on the Devices page).
-- **Activity & bandwidth monitoring** — DNS queries, top domains, active hours,
-  per-device/-profile history from the AdGuard query log.
+- **Activity & bandwidth monitoring** — DNS queries, top domains, and active
+  hours from the AdGuard query log; **real per-device bandwidth** (today's ↓/↑ +
+  live rate) when an OpenWrt router is attached.
 - **Parental controls** — instant block/unblock of domains and categories
   (adult, gaming, social, video, gambling); forced **SafeSearch** and **YouTube
-  Restricted Mode** at the DNS level; **DoH/DoT bypass detection + blocking**.
+  Restricted Mode** at the DNS level; **DoH/DoT bypass detection + blocking**, and
+  (with a router) firewall-level **VPN/DoT/bypass containment** + true internet
+  cutoffs.
 - **Time management** — daily internet quotas and schedule-based blocking
   (bedtime), enforced on a cron heartbeat.
 - **Real-time alerting** — WebSocket feed to the dashboard plus an optional
@@ -35,6 +38,7 @@ on your own hardware.
 | Backend | NestJS + Node — `backend/` |
 | Database | PostgreSQL + TypeORM |
 | Network/DNS | AdGuard Home (via its control API), behind a pluggable `NetworkProvider` |
+| Router (optional) | OpenWrt via ubus, behind a pluggable `RouterProvider` — firewall + bandwidth |
 | Deploy | Docker Compose (home server) + Cloudflare Pages/Tunnel for remote access |
 
 ## Quick start (local / home server)
@@ -99,6 +103,31 @@ the stack refuses to start rather than fall back to a weak default. To rotate a
 password, update `.env` and `docker compose up -d` (and the AdGuard admin user in
 its UI for `ADGUARD_PASSWORD`).
 
+## Optional: OpenWrt router (real bandwidth + full bypass containment)
+
+AdGuard filters DNS; it can't meter bytes or stop a VPN. Attach an OpenWrt router
+to add per-device **bandwidth**, **true internet cutoffs** at the firewall, and
+**bypass containment** (force DNS→AdGuard, drop DoT/known-DoH/VPN). It's fully
+optional — the app runs AdGuard-only by default.
+
+To enable, on the router: install `uhttpd-mod-ubus` (the `/ubus` endpoint), grant
+the API user rpcd `file` (read + exec) ACLs, and install `nlbwmon` for bandwidth.
+Then set in `.env`:
+
+```
+ROUTER_PROVIDER=openwrt
+OPENWRT_URL=http://192.168.1.1
+OPENWRT_USERNAME=root
+OPENWRT_PASSWORD=…        # host .env only, never committed
+ADGUARD_LAN_IP=192.168.1.2
+```
+
+Home Guardian keeps all its firewall state in a dedicated, fenced nftables table
+(`inet home_guardian`) so it never touches OpenWrt's own `fw4` rules. Apply
+containment from the dashboard's **Router** card. (These nft/ubus calls are
+implemented to spec but should be validated on your hardware before you rely on
+them.)
+
 ## Remote access with Cloudflare
 
 Host the dashboard on **Cloudflare Pages** and reach the home API through a
@@ -122,5 +151,6 @@ docker-compose.yml   Postgres + AdGuard + API + web (+ optional cloudflared)
 This tool controls **your own home network**. Bypass defense at the DNS layer
 (DoH/DoT resolver blocking, SafeSearch enforcement) is strong but not absolute —
 a determined user with a VPN needs router-level firewall rules to fully contain.
-The architecture leaves a clean seam (`NetworkProvider`) for an OpenWrt/router
-provider to add that later.
+That's exactly what the optional **OpenWrt router provider** adds (VPN/DoT
+containment, forced DNS, true cutoffs); without a router, controls are
+DNS-only.

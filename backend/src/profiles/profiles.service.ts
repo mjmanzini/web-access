@@ -9,6 +9,10 @@ import {
   NetworkProvider,
   ProfilePolicy,
 } from '../network/network-provider.interface';
+import {
+  ROUTER_PROVIDER,
+  RouterProvider,
+} from '../router/router-provider.interface';
 import { EventsGateway } from '../events/events.gateway';
 import {
   CreateProfileDto,
@@ -31,6 +35,7 @@ export class ProfilesService {
     @InjectRepository(Device) private devices: Repository<Device>,
     @InjectRepository(Rule) private rules: Repository<Rule>,
     @Inject(NETWORK_PROVIDER) private network: NetworkProvider,
+    @Inject(ROUTER_PROVIDER) private router: RouterProvider,
     private events: EventsGateway,
   ) {}
 
@@ -122,9 +127,12 @@ export class ProfilesService {
   }
 
   /**
-   * Recompute the global hard-block set: identifiers of every paused profile and
-   * every device-level block, pushed as AdGuard "disallowed clients". This is
-   * how pause/bedtime/quota take effect immediately.
+   * Recompute the global hard-block set from every paused profile and every
+   * device-level block, and push it to BOTH enforcement layers:
+   *  - AdGuard "disallowed clients" (blocks DNS — instant, IP/MAC/ClientID),
+   *  - the router firewall by MAC (a true all-traffic cutoff, when configured).
+   * Using both means "pause"/bedtime/quota can't be walked around with a
+   * hardcoded resolver or a VPN once a router is attached.
    */
   async syncBlockedIdentifiers(): Promise<void> {
     const pausedProfiles = await this.profiles.find({
@@ -134,15 +142,18 @@ export class ProfilesService {
     const blockedDevices = await this.devices.find({ where: { blocked: true } });
 
     const identifiers = new Set<string>();
-    for (const p of pausedProfiles) {
-      for (const id of this.identifiersFor(p.devices ?? [])) identifiers.add(id);
-    }
-    for (const d of blockedDevices) {
-      if (d.clientId) identifiers.add(d.clientId);
-      if (d.macAddress && !d.macRandomized) identifiers.add(d.macAddress);
-      if (d.ipAddress) identifiers.add(d.ipAddress);
-    }
+    const macs = new Set<string>();
+    const collect = (devices: Device[]) => {
+      for (const id of this.identifiersFor(devices)) identifiers.add(id);
+      for (const d of devices) if (d.macAddress) macs.add(d.macAddress);
+    };
+    for (const p of pausedProfiles) collect(p.devices ?? []);
+    collect(blockedDevices);
+
     await this.network.setBlockedClientIdentifiers([...identifiers]);
+    if (this.router.isEnabled()) {
+      await this.router.setBlockedMacs([...macs]);
+    }
   }
 
   /**

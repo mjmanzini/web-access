@@ -61,6 +61,12 @@ services:
       AUTH_ADMIN_USERNAME: ${AUTH_ADMIN_USERNAME:-admin}
       AUTH_ADMIN_PASSWORD: ${AUTH_ADMIN_PASSWORD:?set AUTH_ADMIN_PASSWORD in .env (never commit it)}
       ACTIVITY_RETENTION_DAYS: ${ACTIVITY_RETENTION_DAYS:-14}
+      # Optional router (firewall enforcement + bandwidth). Off unless set.
+      ROUTER_PROVIDER: ${ROUTER_PROVIDER:-none}
+      OPENWRT_URL: ${OPENWRT_URL:-http://192.168.1.1}
+      OPENWRT_USERNAME: ${OPENWRT_USERNAME:-root}
+      OPENWRT_PASSWORD: ${OPENWRT_PASSWORD:-}
+      ADGUARD_LAN_IP: ${ADGUARD_LAN_IP:-}
       CORS_ORIGIN: ${CORS_ORIGIN:-*}
       ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
     ports:

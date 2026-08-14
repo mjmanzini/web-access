@@ -1,18 +1,29 @@
 import { Fragment, useEffect, useState } from 'react';
 import { api } from '../api/client';
-import type { Device, DnsSetup, Profile } from '../api/types';
+import type { BandwidthRow, Device, DnsSetup, Profile } from '../api/types';
+import { formatBytes, formatRate } from '../api/format';
 
 export default function Devices() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [bandwidth, setBandwidth] = useState<Record<string, BandwidthRow>>({});
   const [busy, setBusy] = useState(false);
   const [setup, setSetup] = useState<{ id: string; data: DnsSetup } | null>(null);
 
   const load = () => {
     api.devices().then(setDevices).catch(() => {});
     api.profiles().then(setProfiles).catch(() => {});
+    api.bandwidth()
+      .then((rows) => setBandwidth(Object.fromEntries(rows.map((r) => [r.deviceId, r]))))
+      .catch(() => {});
   };
-  useEffect(load, []);
+  useEffect(() => {
+    load();
+    const t = setInterval(() => api.bandwidth()
+      .then((rows) => setBandwidth(Object.fromEntries(rows.map((r) => [r.deviceId, r]))))
+      .catch(() => {}), 15_000);
+    return () => clearInterval(t);
+  }, []);
 
   const sync = async () => {
     setBusy(true);
@@ -49,7 +60,7 @@ export default function Devices() {
         <table>
           <thead>
             <tr>
-              <th>Device</th><th>IP</th><th>Identity</th><th>Profile</th><th>Status</th><th></th>
+              <th>Device</th><th>IP</th><th>Identity</th><th>Today ↓/↑</th><th>Profile</th><th>Status</th><th></th>
             </tr>
           </thead>
           <tbody>
@@ -68,6 +79,16 @@ export default function Devices() {
                       <span className="badge ok" title={d.clientId ?? ''}>stable</span>
                     )}{' '}
                     {d.macRandomized && <span className="badge warn">rnd MAC</span>}
+                  </td>
+                  <td className="muted" style={{ whiteSpace: 'nowrap' }}>
+                    {bandwidth[d.id]
+                      ? <>
+                          {formatBytes(bandwidth[d.id].rxBytesToday)} / {formatBytes(bandwidth[d.id].txBytesToday)}
+                          {(bandwidth[d.id].rxRateBps + bandwidth[d.id].txRateBps > 0) && (
+                            <div style={{ fontSize: 11 }}>{formatRate(bandwidth[d.id].rxRateBps)} ↓</div>
+                          )}
+                        </>
+                      : '—'}
                   </td>
                   <td>
                     <select value={d.profileId ?? ''} onChange={(e) => assign(d.id, e.target.value)}>
@@ -91,7 +112,7 @@ export default function Devices() {
                 </tr>
                 {setup?.id === d.id && (
                   <tr>
-                    <td colSpan={6} style={{ background: 'var(--panel-2)' }}>
+                    <td colSpan={7} style={{ background: 'var(--panel-2)' }}>
                       <SetupPanel data={setup.data} />
                     </td>
                   </tr>
@@ -99,7 +120,7 @@ export default function Devices() {
               </Fragment>
             ))}
             {!devices.length && (
-              <tr><td colSpan={6} className="muted">No devices yet — run a network scan.</td></tr>
+              <tr><td colSpan={7} className="muted">No devices yet — run a network scan.</td></tr>
             )}
           </tbody>
         </table>

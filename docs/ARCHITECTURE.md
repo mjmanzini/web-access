@@ -140,7 +140,31 @@ backfilled on boot.
   rows. Recent detail stays queryable; long-range history lives in the rollups
   (`GET /api/activity/history`), and the raw table stays bounded.
 
-## 6. Extending
+## 6. Router provider (optional, complements AdGuard)
+
+DNS filtering can't do everything: a hardcoded resolver or a VPN walks past it.
+A **`RouterProvider`** (separate from `NetworkProvider`, off by default) adds the
+router-level enforcement AdGuard can't — and it's what makes "bandwidth" real.
+Bound by `ROUTER_PROVIDER` env: `openwrt` → `OpenWrtService` (ubus-over-HTTP),
+anything else → `NullRouterProvider` (no-op, so AdGuard-only setups are
+unaffected).
+
+| Capability | How | Used by |
+|-----------|-----|---------|
+| Authoritative device discovery | DHCP leases (`/tmp/dhcp.leases`) | merged into device sync (MAC-authoritative) |
+| Per-device **bandwidth** | `nlbwmon` counters, diffed into daily `DeviceUsage` | `BandwidthService` → `GET /api/bandwidth`, Devices page |
+| **True internet cutoff** | nftables MAC drop-set in a fenced `inet home_guardian` table | `syncBlockedIdentifiers` (pause/bedtime/quota) — alongside AdGuard's DNS block |
+| **Bypass containment** | nft rules: force DNS→AdGuard, drop DoT 853, known-DoH IPs, common VPN ports | `POST /api/router/containment` |
+
+All router state lives in one dedicated nft table so it's fenced from OpenWrt's
+own `fw4` ruleset. Everything is best-effort and defensive: a router blip
+degrades to empty results, never a crash. Requires `uhttpd-mod-ubus`, rpcd `file`
+(read/exec) ACLs for the API user, and `nlbwmon` for bandwidth — see README.
+
+Adding a different router (pfSense, EdgeOS, …) is one new class implementing
+`RouterProvider` plus a branch in `router.module.ts`.
+
+## 7. Extending
 
 - **New enforcement backend:** implement `NetworkProvider`, bind it in
   `network.module.ts`. Nothing else changes.

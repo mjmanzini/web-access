@@ -13,6 +13,10 @@ import {
   NETWORK_PROVIDER,
   NetworkProvider,
 } from '../network/network-provider.interface';
+import {
+  ROUTER_PROVIDER,
+  RouterProvider,
+} from '../router/router-provider.interface';
 import { EventsGateway } from '../events/events.gateway';
 import { ProfilesService } from '../profiles/profiles.service';
 import { isRandomizedMac, normalizeMac } from '../common/mac.util';
@@ -32,6 +36,7 @@ export class DevicesService implements OnModuleInit {
   constructor(
     @InjectRepository(Device) private devices: Repository<Device>,
     @Inject(NETWORK_PROVIDER) private network: NetworkProvider,
+    @Inject(ROUTER_PROVIDER) private router: RouterProvider,
     private events: EventsGateway,
     private profiles: ProfilesService,
     private config: ConfigService,
@@ -100,6 +105,30 @@ export class DevicesService implements OnModuleInit {
    */
   async syncFromNetwork(): Promise<{ discovered: number; created: number }> {
     const discovered = await this.network.discoverDevices();
+
+    // Merge router DHCP leases (MAC-authoritative) — enrich MACs on devices
+    // AdGuard saw by IP only, and add any the router sees that AdGuard didn't.
+    if (this.router.isEnabled()) {
+      const byIp = new Map(discovered.map((d) => [d.ip, d]));
+      for (const lease of await this.router.listLeases()) {
+        const existing = byIp.get(lease.ip);
+        if (existing) {
+          existing.mac = existing.mac ?? lease.mac;
+          existing.name = existing.name ?? lease.hostname;
+        } else {
+          const d = {
+            ip: lease.ip,
+            mac: lease.mac,
+            name: lease.hostname,
+            online: true,
+            lastSeen: new Date(),
+          };
+          discovered.push(d);
+          byIp.set(lease.ip, d);
+        }
+      }
+    }
+
     let created = 0;
 
     for (const d of discovered) {

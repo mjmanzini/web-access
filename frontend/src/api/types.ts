@@ -59,6 +59,22 @@ export interface ActivityLog {
   category: string | null;
 }
 
+export interface BandwidthRow {
+  deviceId: string;
+  name: string;
+  rxBytesToday: number;
+  txBytesToday: number;
+  rxRateBps: number;
+  txRateBps: number;
+}
+
+export interface RouterStatus {
+  enabled: boolean;
+  reachable: boolean;
+  model: string | null;
+  containment: { applied: boolean; rules: string[] };
+}
+
 export interface Alert {
   type:
     | 'blocked_access'
