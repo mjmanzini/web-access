@@ -20,7 +20,20 @@ Cloudflare's edge:
 
 ## 1. Dashboard on Cloudflare Pages
 
-**Option A — Git integration (simplest, no tokens).** In the Cloudflare
+**Option A — one command.** With `VITE_API_BASE` (and, for non-interactive runs,
+`CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID`) in `.env`:
+
+```bash
+make deploy-cloudflare
+# or override inline:
+make deploy-cloudflare VITE_API_BASE=https://api.example.com
+```
+
+It builds `frontend/dist` with your API URL and runs `wrangler pages deploy`
+(first run creates the `home-guardian` Pages project). Without a token it opens
+an interactive `wrangler login`.
+
+**Option B — Git integration (no tokens).** In the Cloudflare
 dashboard → Workers & Pages → Create → Pages → Connect to Git → pick this repo:
 
 | Setting | Value |
@@ -33,7 +46,7 @@ dashboard → Workers & Pages → Create → Pages → Connect to Git → pick t
 Cloudflare rebuilds on every push to `main`. `frontend/public/_redirects`
 (SPA fallback) and `_headers` (security headers) are picked up automatically.
 
-**Option B — GitHub Actions.** Use the included
+**Option C — GitHub Actions.** Use the included
 [`deploy-cloudflare.yml`](../../.github/workflows/deploy-cloudflare.yml). Set in
 GitHub → Settings → Secrets and variables → Actions:
 

@@ -137,8 +137,8 @@ them.)
 Only the **dashboard** goes on Cloudflare's edge — the backend stays on your home
 server (it has to reach your LAN's AdGuard + Postgres and can't run on Workers).
 
-- **Dashboard → Cloudflare Pages** — build `frontend/dist` with
-  `VITE_API_BASE` pointing at your API. Connect the repo in the Pages dashboard,
+- **Dashboard → Cloudflare Pages** — one command: `make deploy-cloudflare`
+  (with `VITE_API_BASE` in `.env`). Or connect the repo in the Pages dashboard,
   or use the included [`deploy-cloudflare.yml`](.github/workflows/deploy-cloudflare.yml)
   workflow (opt in with the `CLOUDFLARE_DEPLOY` repo variable).
 - **Backend → Cloudflare Tunnel + Access** — expose the home API with no open
