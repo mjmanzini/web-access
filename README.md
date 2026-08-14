@@ -132,13 +132,21 @@ containment from the dashboard's **Router** card. (These nft/ubus calls are
 implemented to spec but should be validated on your hardware before you rely on
 them.)
 
-## Remote access with Cloudflare
+## Deploy to Cloudflare
 
-Host the dashboard on **Cloudflare Pages** and reach the home API through a
-**Cloudflare Tunnel** (no open router ports), gated by **Cloudflare Access**.
-Secrets stay out of the repo: the tunnel token comes from the Cloudflare Zero
-Trust dashboard, and the dashboard's API URL is a Pages build variable
-(`VITE_API_BASE`). Full steps: [infra/cloudflare/README.md](infra/cloudflare/README.md).
+Only the **dashboard** goes on Cloudflare's edge — the backend stays on your home
+server (it has to reach your LAN's AdGuard + Postgres and can't run on Workers).
+
+- **Dashboard → Cloudflare Pages** — build `frontend/dist` with
+  `VITE_API_BASE` pointing at your API. Connect the repo in the Pages dashboard,
+  or use the included [`deploy-cloudflare.yml`](.github/workflows/deploy-cloudflare.yml)
+  workflow (opt in with the `CLOUDFLARE_DEPLOY` repo variable).
+- **Backend → Cloudflare Tunnel + Access** — expose the home API with no open
+  router ports (`docker compose --profile cloudflare up -d`), gated by Access.
+
+Secrets stay out of the repo: the tunnel token comes from the Zero Trust
+dashboard, and the API URL is a Pages build variable. **Full step-by-step
+runbook: [infra/cloudflare/README.md](infra/cloudflare/README.md).**
 
 ## Project layout
 

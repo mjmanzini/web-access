@@ -1,0 +1,23 @@
+# Example cloudflared ingress for exposing the home backend (API + WebSocket)
+# through a Cloudflare Tunnel — no open router ports.
+#
+# You normally DON'T need this file if you use a token-based (remote-managed)
+# tunnel: create the tunnel + public hostname in the Cloudflare Zero Trust
+# dashboard and just set TUNNEL_TOKEN in .env, then:
+#   docker compose --profile cloudflare up -d
+#
+# Use this file only for a locally-configured tunnel (cloudflared with a
+# credentials file). Route your API hostname to the api container; Socket.IO
+# rides the same host (Cloudflare supports WebSockets natively).
+
+tunnel: <your-tunnel-uuid>
+credentials-file: /etc/cloudflared/<your-tunnel-uuid>.json
+
+ingress:
+  # Backend API + WebSocket (the dashboard on Pages calls this via VITE_API_BASE).
+  - hostname: api.example.com
+    service: http://api:3001
+  # Optional: also serve the dashboard through the tunnel instead of Pages.
+  # - hostname: guardian.example.com
+  #   service: http://web:5173
+  - service: http_status:404

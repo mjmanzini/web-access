@@ -1,0 +1,7 @@
+# Cloudflare Pages config for the Home Guardian dashboard (static SPA).
+# Used by `wrangler pages deploy` and the deploy-cloudflare workflow. The API is
+# NOT hosted here — it runs on your home server and is reached via Cloudflare
+# Tunnel (set VITE_API_BASE to that hostname at build time).
+name = "home-guardian"
+pages_build_output_dir = "dist"
+compatibility_date = "2024-10-01"
