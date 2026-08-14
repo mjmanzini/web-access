@@ -1,4 +1,5 @@
 import { Logger } from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
 import {
   OnGatewayConnection,
   OnGatewayDisconnect,
@@ -41,8 +42,21 @@ export class EventsGateway
   @WebSocketServer()
   server: Server;
 
+  constructor(private readonly jwt: JwtService) {}
+
+  /** Reject any socket that doesn't present a valid JWT in its handshake. */
   handleConnection(client: Socket) {
-    this.logger.debug(`dashboard connected: ${client.id}`);
+    const token =
+      (client.handshake.auth?.token as string) ||
+      (client.handshake.query?.token as string) ||
+      '';
+    try {
+      this.jwt.verify(token);
+      this.logger.debug(`dashboard connected: ${client.id}`);
+    } catch {
+      this.logger.debug(`rejected unauthenticated socket: ${client.id}`);
+      client.disconnect(true);
+    }
   }
 
   handleDisconnect(client: Socket) {

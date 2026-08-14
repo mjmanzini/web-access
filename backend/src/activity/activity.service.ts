@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Between, Repository } from 'typeorm';
 import { ActivityLog } from '../entities/activity-log.entity';
+import { ActivityRollup } from '../entities/activity-rollup.entity';
 import { Device } from '../entities/device.entity';
 import {
   NETWORK_PROVIDER,
@@ -24,6 +25,7 @@ export class ActivityService {
 
   constructor(
     @InjectRepository(ActivityLog) private logs: Repository<ActivityLog>,
+    @InjectRepository(ActivityRollup) private rollups: Repository<ActivityRollup>,
     @InjectRepository(Device) private devices: Repository<Device>,
     @Inject(NETWORK_PROVIDER) private network: NetworkProvider,
     private events: EventsGateway,
@@ -127,6 +129,31 @@ export class ActivityService {
       .limit(params.limit ?? 20);
     if (params.deviceId) qb.andWhere('a.deviceId = :d', { d: params.deviceId });
     if (params.profileId) qb.andWhere('a.profileId = :p', { p: params.profileId });
+    const rows = await qb.getRawMany();
+    return rows.map((r) => ({ domain: r.domain, hits: Number(r.hits) }));
+  }
+
+  /**
+   * Historical top domains from the kept rollups (survives raw-log pruning).
+   * `days` counts back from today; omit profileId for all traffic.
+   */
+  async history(params: {
+    profileId?: string;
+    days?: number;
+    limit?: number;
+  }): Promise<Array<{ domain: string; hits: number }>> {
+    const since = new Date(Date.now() - (params.days ?? 30) * 86_400_000)
+      .toISOString()
+      .slice(0, 10);
+    const qb = this.rollups
+      .createQueryBuilder('r')
+      .select('r.domain', 'domain')
+      .addSelect('SUM(r.hits)', 'hits')
+      .where('r.date >= :since', { since })
+      .groupBy('r.domain')
+      .orderBy('hits', 'DESC')
+      .limit(params.limit ?? 20);
+    if (params.profileId) qb.andWhere('r.profileId = :p', { p: params.profileId });
     const rows = await qb.getRawMany();
     return rows.map((r) => ({ domain: r.domain, hits: Number(r.hits) }));
   }

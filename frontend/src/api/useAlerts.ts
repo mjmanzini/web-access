@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
 import type { Alert } from './types';
+import { auth } from './auth';
 
 /**
  * Subscribes to the backend's Socket.IO stream and keeps the last N alerts.
@@ -11,8 +12,12 @@ export function useAlerts(max = 50) {
   const [connected, setConnected] = useState(false);
 
   useEffect(() => {
+    if (!auth.token) return; // don't connect until logged in
     const base = import.meta.env.VITE_API_BASE ?? '';
-    const socket: Socket = io(base || '/', { path: '/socket.io' });
+    const socket: Socket = io(base || '/', {
+      path: '/socket.io',
+      auth: { token: auth.token },
+    });
 
     socket.on('connect', () => setConnected(true));
     socket.on('disconnect', () => setConnected(false));

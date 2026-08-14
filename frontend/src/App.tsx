@@ -1,10 +1,13 @@
+import { useEffect, useState } from 'react';
 import { NavLink, Navigate, Route, Routes } from 'react-router-dom';
 import Dashboard from './pages/Dashboard';
 import Devices from './pages/Devices';
 import Profiles from './pages/Profiles';
 import Rules from './pages/Rules';
 import Activity from './pages/Activity';
+import Login from './pages/Login';
 import AlertsFeed from './components/AlertsFeed';
+import { auth } from './api/auth';
 
 const NAV = [
   { to: '/dashboard', label: 'Dashboard' },
@@ -15,6 +18,11 @@ const NAV = [
 ];
 
 export default function App() {
+  const [authed, setAuthed] = useState(auth.isAuthed);
+  useEffect(() => auth.subscribe(setAuthed), []);
+
+  if (!authed) return <Login />;
+
   return (
     <div className="layout">
       <aside className="sidebar">
@@ -28,6 +36,13 @@ export default function App() {
             </NavLink>
           ))}
         </nav>
+        <button
+          className="ghost"
+          style={{ marginTop: 20, width: '100%' }}
+          onClick={() => auth.clear()}
+        >
+          Sign out
+        </button>
       </aside>
 
       <main className="main">

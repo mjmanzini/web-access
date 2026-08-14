@@ -4,6 +4,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { ScheduleModule } from '@nestjs/schedule';
 import { buildTypeOrmOptions } from './config/typeorm.config';
 import { AppController } from './app.controller';
+import { AuthModule } from './auth/auth.module';
 import { NetworkModule } from './network/network.module';
 import { EventsModule } from './events/events.module';
 import { ProfilesModule } from './profiles/profiles.module';
@@ -20,7 +21,8 @@ import { SchedulesModule } from './schedules/schedules.module';
       useFactory: buildTypeOrmOptions,
     }),
     ScheduleModule.forRoot(),
-    // Infrastructure (global): network provider + realtime events.
+    // Infrastructure (global): auth, network provider, realtime events.
+    AuthModule,
     NetworkModule,
     EventsModule,
     // Features.

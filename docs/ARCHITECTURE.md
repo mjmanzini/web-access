@@ -53,6 +53,8 @@ the DB then calls the provider so AdGuard immediately matches.
 | `ActivityLog` | `activity_logs` | One DNS query (activity feed) | `timestamp`, `clientIp`, `deviceId`, `profileId`, `domain`, `action`, `category` — indexed on `timestamp`, `(deviceId,timestamp)`, `domain` |
 | `Schedule` | `schedules` | Recurring block window (bedtime) | `daysOfWeek[]`, `startTime`, `endTime`, `profileId` |
 | `DailyUsage` | `daily_usage` | Accrued active minutes/day for quotas | unique `(profileId, date)`, `usedMinutes` |
+| `ActivityRollup` | `activity_rollups` | Daily aggregate kept after raw pruning | PK `(date, profileId, domain, action)`, `hits` |
+| `AdminUser` | `admin_users` | Dashboard admin (parent) login | `username`, `passwordHash` (bcrypt) |
 
 Relationships: `Profile 1─* Device`, `Profile 1─* Rule`, `Profile 1─* Schedule`,
 `Device 1─* Rule`. `Device.profileId` is `SET NULL` on profile delete; rules
@@ -99,7 +101,22 @@ to AdGuard, and block known VPN ports/DoH IP ranges. That belongs to a future
 **OpenWrt provider** implementing the same `NetworkProvider` interface; the
 architecture already has the seam for it.
 
-## 4. Extending
+## 4. Security & data retention
+
+- **Auth (fail-closed).** A global `JwtAuthGuard` (`APP_GUARD`) requires a valid
+  Bearer JWT on every route except those marked `@Public()` (login, health). The
+  Socket.IO gateway verifies the same JWT in its handshake and disconnects
+  unauthenticated sockets. A single parent/admin is seeded from
+  `AUTH_ADMIN_USERNAME` / `AUTH_ADMIN_PASSWORD` on first boot (bcrypt-hashed);
+  password change is available in-app. Tokens are signed with `JWT_SECRET`. For
+  remote access, keep **Cloudflare Access** in front as the outer layer.
+- **Retention.** `RetentionService` runs nightly: it aggregates raw
+  `activity_logs` older than `ACTIVITY_RETENTION_DAYS` (default 14) into
+  `activity_rollups` (idempotent upsert on the natural key), then deletes the raw
+  rows. Recent detail stays queryable; long-range history lives in the rollups
+  (`GET /api/activity/history`), and the raw table stays bounded.
+
+## 5. Extending
 
 - **New enforcement backend:** implement `NetworkProvider`, bind it in
   `network.module.ts`. Nothing else changes.

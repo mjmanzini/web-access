@@ -53,6 +53,11 @@ services:
       ADGUARD_URL: http://adguardhome:80
       ADGUARD_USERNAME: ${ADGUARD_USERNAME:-admin}
       ADGUARD_PASSWORD: ${ADGUARD_PASSWORD:?set ADGUARD_PASSWORD in .env (never commit it)}
+      # Dashboard auth: JWT signing secret + the seeded parent admin login.
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (never commit it)}
+      AUTH_ADMIN_USERNAME: ${AUTH_ADMIN_USERNAME:-admin}
+      AUTH_ADMIN_PASSWORD: ${AUTH_ADMIN_PASSWORD:?set AUTH_ADMIN_PASSWORD in .env (never commit it)}
+      ACTIVITY_RETENTION_DAYS: ${ACTIVITY_RETENTION_DAYS:-14}
       CORS_ORIGIN: ${CORS_ORIGIN:-*}
       ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
     ports:

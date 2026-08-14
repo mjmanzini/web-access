@@ -56,8 +56,10 @@ Then:
    [infra/adguard/AdGuardHome.example.yaml](infra/adguard/AdGuardHome.example.yaml).
 2. **Point your network at it** — set your router's DHCP DNS server to `<host>`
    so all devices resolve through AdGuard.
-3. **Open the dashboard** — `http://<host>:5173`. Hit **Scan network** on the
-   Devices page, create Profiles, assign devices, and set rules.
+3. **Open the dashboard** — `http://<host>:5173` and sign in with
+   `AUTH_ADMIN_USERNAME` / `AUTH_ADMIN_PASSWORD` (the admin is seeded on first
+   boot). Then hit **Scan network** on the Devices page, create Profiles, assign
+   devices, and set rules. Change the admin password from the app once you're in.
 
 Services: dashboard `:5173`, API `:3001/api`, AdGuard admin `:8080`, Postgres
 `:5432` (internal).
@@ -85,6 +87,8 @@ lives:
 |--------|---------|----------------|
 | `POSTGRES_PASSWORD` | API ↔ Postgres | `.env` on the home server only |
 | `ADGUARD_PASSWORD` | API ↔ AdGuard control API | `.env` on the home server only |
+| `JWT_SECRET` | Dashboard login token signing | `.env` on the home server only |
+| `AUTH_ADMIN_PASSWORD` | Seeds the parent/admin login | `.env` on the home server only |
 | `TUNNEL_TOKEN` | Cloudflare Tunnel | Cloudflare Zero Trust dashboard → `.env` on the host |
 | `VITE_API_BASE` | Dashboard → API URL | Cloudflare Pages build env var (not a secret) |
 
