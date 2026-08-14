@@ -136,6 +136,13 @@ backfilled on boot.
   `AUTH_ADMIN_USERNAME` / `AUTH_ADMIN_PASSWORD` on first boot (bcrypt-hashed);
   password change is available in-app. Tokens are signed with `JWT_SECRET`. For
   remote access, keep **Cloudflare Access** in front as the outer layer.
+- **Heartbeat / offline detection.** `HealthService` polls AdGuard (and the
+  router, if enabled) every `HEARTBEAT_INTERVAL_SEC`; a component down for
+  `HEARTBEAT_FAIL_THRESHOLD` checks raises a `system_down` alert (dashboard +
+  webhook), and recovery raises `system_recovered`. While fully healthy it
+  pings `HEARTBEAT_PING_URL` — a dead-man's switch, so an external monitor
+  catches the one failure the process can't self-report: the box losing power.
+  Snapshot at `GET /api/system/health`.
 - **Retention.** `RetentionService` runs nightly: it aggregates raw
   `activity_logs` older than `ACTIVITY_RETENTION_DAYS` (default 14) into
   `activity_rollups` (idempotent upsert on the natural key), then deletes the raw
@@ -163,8 +170,11 @@ own `fw4` ruleset. Everything is best-effort and defensive: a router blip
 degrades to empty results, never a crash. Requires `uhttpd-mod-ubus`, rpcd `file`
 (read/exec) ACLs for the API user, and `nlbwmon` for bandwidth — see README.
 
-Adding a different router (pfSense, EdgeOS, …) is one new class implementing
-`RouterProvider` plus a branch in `router.module.ts`.
+Two drivers ship today, selected by `ROUTER_PROVIDER`: **`openwrt`** (full — ubus
++ nftables) and **`huawei`** (partial — a HiLink LTE CPE like the B525, via its
+XML API with SCRAM login: device discovery + per-device Wi-Fi MAC-block cutoff,
+but no bandwidth or containment). Adding another router (pfSense, EdgeOS, …) is
+one new class implementing `RouterProvider` plus a branch in `router.module.ts`.
 
 ## 7. Extending
 

@@ -8,6 +8,7 @@ import type {
   ProfileReport,
   RouterStatus,
   Rule,
+  SystemHealth,
 } from './types';
 import { auth } from './auth';
 
@@ -82,6 +83,7 @@ export const api = {
   // activity
   activity: (limit = 100) => request<ActivityLog[]>(`/activity?limit=${limit}`),
   networkStatus: () => request<{ running: boolean; version: string | null }>('/network/status'),
+  systemHealth: () => request<SystemHealth>('/system/health'),
 
   // router + bandwidth
   bandwidth: () => request<BandwidthRow[]>('/bandwidth'),

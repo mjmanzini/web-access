@@ -61,12 +61,20 @@ services:
       AUTH_ADMIN_USERNAME: ${AUTH_ADMIN_USERNAME:-admin}
       AUTH_ADMIN_PASSWORD: ${AUTH_ADMIN_PASSWORD:?set AUTH_ADMIN_PASSWORD in .env (never commit it)}
       ACTIVITY_RETENTION_DAYS: ${ACTIVITY_RETENTION_DAYS:-14}
-      # Optional router (firewall enforcement + bandwidth). Off unless set.
+      # Offline detection / heartbeat.
+      HEARTBEAT_INTERVAL_SEC: ${HEARTBEAT_INTERVAL_SEC:-60}
+      HEARTBEAT_FAIL_THRESHOLD: ${HEARTBEAT_FAIL_THRESHOLD:-3}
+      HEARTBEAT_PING_URL: ${HEARTBEAT_PING_URL:-}
+      # Optional router integration. "openwrt" (full), "huawei" (LTE CPE:
+      # discovery + MAC-block cutoff), or "none" (default, AdGuard-only).
       ROUTER_PROVIDER: ${ROUTER_PROVIDER:-none}
       OPENWRT_URL: ${OPENWRT_URL:-http://192.168.1.1}
       OPENWRT_USERNAME: ${OPENWRT_USERNAME:-root}
       OPENWRT_PASSWORD: ${OPENWRT_PASSWORD:-}
       ADGUARD_LAN_IP: ${ADGUARD_LAN_IP:-}
+      HUAWEI_URL: ${HUAWEI_URL:-http://192.168.8.1}
+      HUAWEI_USERNAME: ${HUAWEI_USERNAME:-admin}
+      HUAWEI_PASSWORD: ${HUAWEI_PASSWORD:-}
       CORS_ORIGIN: ${CORS_ORIGIN:-*}
       ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
     ports:

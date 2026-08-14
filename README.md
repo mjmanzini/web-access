@@ -29,6 +29,9 @@ on your own hardware.
   (bedtime), enforced on a cron heartbeat.
 - **Real-time alerting** — WebSocket feed to the dashboard plus an optional
   outbound webhook on blocked access, bypass attempts, and new devices.
+- **Offline detection** — a heartbeat alerts you if AdGuard/the router goes
+  unreachable (filter down), plus an optional dead-man's-switch ping so an
+  external monitor catches the whole box losing power.
 - **Everyday controls** — an "ask to unblock" request queue (kid requests a
   domain, parent approves → allow rule), **bonus time** and one-tap **pause all**,
   per-profile **screen-time reports** (7-day usage + top domains), a **weekly
@@ -114,7 +117,23 @@ to add per-device **bandwidth**, **true internet cutoffs** at the firewall, and
 **bypass containment** (force DNS→AdGuard, drop DoT/known-DoH/VPN). It's fully
 optional — the app runs AdGuard-only by default.
 
-To enable, on the router: install `uhttpd-mod-ubus` (the `/ubus` endpoint), grant
+> **Router compatibility.** Full router features (firewall cutoffs, bandwidth,
+> VPN/DoT containment) require **OpenWrt** (`ROUTER_PROVIDER=openwrt`). For a
+> **Huawei HiLink LTE CPE** (e.g. B525) set `ROUTER_PROVIDER=huawei` for a
+> partial provider — device discovery + per-device Wi-Fi **MAC-block cutoff**
+> (real pause/bedtime), but no bandwidth or containment (those stay DNS-layer via
+> AdGuard). Other stock ISP routers: run **AdGuard-only** (point the router's
+> DHCP DNS at the AdGuard box as the *only* resolver, or use per-device DoT/DoH
+> ClientID), or add an OpenWrt device inline for the full feature set.
+>
+> **Huawei LTE (`ROUTER_PROVIDER=huawei`).** Set `HUAWEI_URL` / `HUAWEI_USERNAME`
+> / `HUAWEI_PASSWORD` (the router admin login). The driver talks to the HiLink
+> XML API (SCRAM login). MAC-block affects Wi-Fi clients; a randomized MAC can
+> evade it, so AdGuard blocks in parallel by ClientID/IP. Implemented to the B525
+> API spec but **validate against your device** — Huawei firmwares vary in the
+> MAC-filter field names.
+
+To enable (OpenWrt only): install `uhttpd-mod-ubus` (the `/ubus` endpoint), grant
 the API user rpcd `file` (read + exec) ACLs, and install `nlbwmon` for bandwidth.
 Then set in `.env`:
 
