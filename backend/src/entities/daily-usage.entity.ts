@@ -28,6 +28,11 @@ export class DailyUsage {
   @Column({ type: 'int', default: 0 })
   usedMinutes: number;
 
+  /** Extra minutes granted for today (a parent's "bonus time"); added to the
+   * profile's daily limit when the quota is evaluated. */
+  @Column({ type: 'int', default: 0 })
+  bonusMinutes: number;
+
   @UpdateDateColumn()
   updatedAt: Date;
 }

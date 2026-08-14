@@ -21,6 +21,7 @@ import { EventsGateway } from '../events/events.gateway';
 import { ProfilesService } from '../profiles/profiles.service';
 import { isRandomizedMac, normalizeMac } from '../common/mac.util';
 import { generateClientId } from '../common/client-id.util';
+import { lookupVendor } from '../common/oui';
 import { UpdateDeviceDto } from './dto/device.dto';
 
 /**
@@ -145,18 +146,23 @@ export class DevicesService implements OnModuleInit {
         if (mac) {
           existing.macAddress = mac;
           existing.macRandomized = isRandomizedMac(mac);
+          if (!existing.vendor) existing.vendor = lookupVendor(mac);
         }
         await this.devices.save(existing);
         continue;
       }
 
       const randomized = isRandomizedMac(mac);
+      const vendor = lookupVendor(mac);
+      // Prefer discovered hostname; else a friendly "<Vendor> device"; else IP.
+      const name = d.name || (vendor ? `${vendor} device` : d.ip);
       const device = this.devices.create({
-        name: d.name || d.ip,
-        clientId: generateClientId(d.name || d.ip),
+        name,
+        clientId: generateClientId(name),
         ipAddress: d.ip,
         macAddress: mac,
         macRandomized: randomized,
+        vendor,
         isOnline: d.online,
         lastSeenAt: d.lastSeen ?? new Date(),
       });

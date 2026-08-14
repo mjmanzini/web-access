@@ -13,6 +13,8 @@ import { DevicesModule } from './devices/devices.module';
 import { RulesModule } from './rules/rules.module';
 import { ActivityModule } from './activity/activity.module';
 import { BandwidthModule } from './bandwidth/bandwidth.module';
+import { RequestsModule } from './requests/requests.module';
+import { ReportsModule } from './reports/reports.module';
 import { SchedulesModule } from './schedules/schedules.module';
 
 @Module({
@@ -34,6 +36,8 @@ import { SchedulesModule } from './schedules/schedules.module';
     RulesModule,
     ActivityModule,
     BandwidthModule,
+    RequestsModule,
+    ReportsModule,
     SchedulesModule,
   ],
   controllers: [AppController],

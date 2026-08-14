@@ -75,6 +75,25 @@ export interface RouterStatus {
   containment: { applied: boolean; rules: string[] };
 }
 
+export interface AccessRequest {
+  id: string;
+  domain: string;
+  note: string | null;
+  clientIp: string;
+  deviceId: string | null;
+  profileId: string | null;
+  status: 'pending' | 'approved' | 'denied';
+  createdAt: string;
+}
+
+export interface ProfileReport {
+  profileId: string;
+  name: string;
+  today: { usedMinutes: number; limitMinutes: number | null; bonusMinutes: number };
+  last7Days: Array<{ date: string; usedMinutes: number }>;
+  topDomains: Array<{ domain: string; hits: number }>;
+}
+
 export interface Alert {
   type:
     | 'blocked_access'

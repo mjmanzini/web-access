@@ -28,9 +28,21 @@ export class ProfilesController {
     return this.profiles.findOne(id);
   }
 
+  /** One-tap pause/resume for every profile (e.g. "dinner time"). */
+  @Post('pause-all')
+  pauseAll(@Body() body: { paused: boolean }) {
+    return this.profiles.pauseAll(!!body.paused);
+  }
+
   @Post()
   create(@Body() dto: CreateProfileDto) {
     return this.profiles.create(dto);
+  }
+
+  /** Grant extra minutes for today (lifts a quota pause if active). */
+  @Post(':id/bonus-time')
+  bonusTime(@Param('id') id: string, @Body() body: { minutes: number }) {
+    return this.profiles.grantBonusTime(id, Number(body.minutes) || 0);
   }
 
   @Patch(':id')

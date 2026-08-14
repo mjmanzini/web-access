@@ -1,9 +1,11 @@
 import type {
+  AccessRequest,
   ActivityLog,
   BandwidthRow,
   Device,
   DnsSetup,
   Profile,
+  ProfileReport,
   RouterStatus,
   Rule,
 } from './types';
@@ -50,6 +52,19 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ paused, reason }),
     }),
+  pauseAll: (paused: boolean) =>
+    request<void>('/profiles/pause-all', { method: 'POST', body: JSON.stringify({ paused }) }),
+  bonusTime: (id: string, minutes: number) =>
+    request<Profile>(`/profiles/${id}/bonus-time`, {
+      method: 'POST',
+      body: JSON.stringify({ minutes }),
+    }),
+  report: (id: string) => request<ProfileReport>(`/reports/profile/${id}`),
+
+  // access requests
+  pendingRequests: () => request<AccessRequest[]>('/requests/pending'),
+  approveRequest: (id: string) => request<AccessRequest>(`/requests/${id}/approve`, { method: 'POST' }),
+  denyRequest: (id: string) => request<AccessRequest>(`/requests/${id}/deny`, { method: 'POST' }),
 
   // devices
   devices: () => request<Device[]>('/devices'),

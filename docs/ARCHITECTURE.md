@@ -55,6 +55,8 @@ the DB then calls the provider so AdGuard immediately matches.
 | `DailyUsage` | `daily_usage` | Accrued active minutes/day for quotas | unique `(profileId, date)`, `usedMinutes` |
 | `ActivityRollup` | `activity_rollups` | Daily aggregate kept after raw pruning | PK `(date, profileId, domain, action)`, `hits` |
 | `AdminUser` | `admin_users` | Dashboard admin (parent) login | `username`, `passwordHash` (bcrypt) |
+| `DeviceUsage` | `device_usage` | Daily per-device bandwidth (router) | unique `(deviceId, date)`, `rxBytes`, `txBytes` |
+| `AccessRequest` | `access_requests` | "Ask to unblock" queue | `domain`, `status`, `deviceId`, `profileId` |
 
 Relationships: `Profile 1─* Device`, `Profile 1─* Rule`, `Profile 1─* Schedule`,
 `Device 1─* Rule`. `Device.profileId` is `SET NULL` on profile delete; rules

@@ -62,11 +62,11 @@ export class SchedulerService {
       if (profile.internetPaused && profile.pausedReason === 'manual') continue;
 
       const used = await this.activity.activeMinutesToday(profile.id);
-      await this.recordUsage(profile.id, used);
+      const bonus = await this.recordUsage(profile.id, used);
 
       const overQuota =
         profile.dailyTimeLimitMinutes != null &&
-        used >= profile.dailyTimeLimitMinutes;
+        used >= profile.dailyTimeLimitMinutes + bonus;
       const inBlockWindow = (profile.schedules ?? []).some((s) =>
         SchedulesService.isActive(s, now),
       );
@@ -87,15 +87,16 @@ export class SchedulerService {
     }
   }
 
-  /** Upsert today's accrued active minutes for reporting. */
-  private async recordUsage(profileId: string, usedMinutes: number): Promise<void> {
+  /** Upsert today's accrued active minutes; returns today's bonus minutes. */
+  private async recordUsage(profileId: string, usedMinutes: number): Promise<number> {
     const date = new Date().toISOString().slice(0, 10);
     const existing = await this.usage.findOne({ where: { profileId, date } });
     if (existing) {
       existing.usedMinutes = usedMinutes;
       await this.usage.save(existing);
-    } else {
-      await this.usage.save(this.usage.create({ profileId, date, usedMinutes }));
+      return existing.bonusMinutes ?? 0;
     }
+    await this.usage.save(this.usage.create({ profileId, date, usedMinutes }));
+    return 0;
   }
 }

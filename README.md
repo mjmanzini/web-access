@@ -29,6 +29,10 @@ on your own hardware.
   (bedtime), enforced on a cron heartbeat.
 - **Real-time alerting** — WebSocket feed to the dashboard plus an optional
   outbound webhook on blocked access, bypass attempts, and new devices.
+- **Everyday controls** — an "ask to unblock" request queue (kid requests a
+  domain, parent approves → allow rule), **bonus time** and one-tap **pause all**,
+  per-profile **screen-time reports** (7-day usage + top domains), a **weekly
+  digest** to your webhook, and automatic device naming by MAC vendor (OUI).
 
 ## Stack
 

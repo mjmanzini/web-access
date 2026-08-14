@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { Profile } from '../entities/profile.entity';
 import { Device } from '../entities/device.entity';
 import { Rule } from '../entities/rule.entity';
+import { DailyUsage } from '../entities/daily-usage.entity';
 import {
   NETWORK_PROVIDER,
   NetworkProvider,
@@ -34,6 +35,7 @@ export class ProfilesService {
     @InjectRepository(Profile) private profiles: Repository<Profile>,
     @InjectRepository(Device) private devices: Repository<Device>,
     @InjectRepository(Rule) private rules: Repository<Rule>,
+    @InjectRepository(DailyUsage) private dailyUsage: Repository<DailyUsage>,
     @Inject(NETWORK_PROVIDER) private network: NetworkProvider,
     @Inject(ROUTER_PROVIDER) private router: RouterProvider,
     private events: EventsGateway,
@@ -91,6 +93,34 @@ export class ProfilesService {
       });
     }
     return this.findOne(id);
+  }
+
+  /** Grant extra minutes for today and lift a quota-based pause if present. */
+  async grantBonusTime(id: string, minutes: number): Promise<Profile> {
+    const date = new Date().toISOString().slice(0, 10);
+    let row = await this.dailyUsage.findOne({ where: { profileId: id, date } });
+    if (!row) row = this.dailyUsage.create({ profileId: id, date, usedMinutes: 0, bonusMinutes: 0 });
+    row.bonusMinutes += Math.max(0, Math.round(minutes));
+    await this.dailyUsage.save(row);
+
+    // If they were paused specifically for hitting the quota, resume now.
+    const profile = await this.findOne(id);
+    if (profile.internetPaused && profile.pausedReason === 'quota_exceeded') {
+      await this.setPaused(id, { paused: false });
+    }
+    return this.findOne(id);
+  }
+
+  /** One-tap: pause or resume every profile at once (manual). */
+  async pauseAll(paused: boolean): Promise<void> {
+    const all = await this.profiles.find();
+    for (const p of all) {
+      await this.profiles.update(p.id, {
+        internetPaused: paused,
+        pausedReason: paused ? 'manual' : null,
+      });
+    }
+    await this.syncBlockedIdentifiers();
   }
 
   // ---- policy compilation + reconciliation ----

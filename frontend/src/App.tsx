@@ -5,6 +5,7 @@ import Devices from './pages/Devices';
 import Profiles from './pages/Profiles';
 import Rules from './pages/Rules';
 import Activity from './pages/Activity';
+import Requests from './pages/Requests';
 import Login from './pages/Login';
 import AlertsFeed from './components/AlertsFeed';
 import { auth } from './api/auth';
@@ -14,6 +15,7 @@ const NAV = [
   { to: '/devices', label: 'Devices' },
   { to: '/profiles', label: 'Profiles' },
   { to: '/rules', label: 'Rules' },
+  { to: '/requests', label: 'Requests' },
   { to: '/activity', label: 'Activity' },
 ];
 
@@ -52,6 +54,7 @@ export default function App() {
           <Route path="/devices" element={<Devices />} />
           <Route path="/profiles" element={<Profiles />} />
           <Route path="/rules" element={<Rules />} />
+          <Route path="/requests" element={<Requests />} />
           <Route path="/activity" element={<Activity />} />
         </Routes>
       </main>
