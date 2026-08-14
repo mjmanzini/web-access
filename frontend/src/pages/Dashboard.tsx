@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api/client';
-import type { ActivityLog, Device, Profile, RouterStatus } from '../api/types';
+import type { ActivityLog, Device, Profile, RouterStatus, SystemHealth } from '../api/types';
 
 export default function Dashboard() {
   const [devices, setDevices] = useState<Device[]>([]);
@@ -8,6 +8,7 @@ export default function Dashboard() {
   const [activity, setActivity] = useState<ActivityLog[]>([]);
   const [net, setNet] = useState<{ running: boolean; version: string | null }>();
   const [router, setRouter] = useState<RouterStatus>();
+  const [health, setHealth] = useState<SystemHealth>();
   const [containing, setContaining] = useState(false);
 
   const loadRouter = () => api.routerStatus().then(setRouter).catch(() => {});
@@ -16,7 +17,10 @@ export default function Dashboard() {
     api.profiles().then(setProfiles).catch(() => {});
     api.activity(200).then(setActivity).catch(() => {});
     api.networkStatus().then(setNet).catch(() => setNet({ running: false, version: null }));
+    api.systemHealth().then(setHealth).catch(() => {});
     loadRouter();
+    const t = setInterval(() => api.systemHealth().then(setHealth).catch(() => {}), 30_000);
+    return () => clearInterval(t);
   }, []);
 
   const applyContainment = async () => {
@@ -38,9 +42,18 @@ export default function Dashboard() {
     <>
       <div className="header">
         <h1>Dashboard</h1>
-        <span className={`badge ${net?.running ? 'ok' : 'danger'}`}>
-          AdGuard {net?.running ? `up · ${net.version ?? ''}` : 'unreachable'}
-        </span>
+        <div className="row">
+          {health && (
+            <span className={`badge ${health.healthy ? 'ok' : 'danger'}`} title={
+              health.components.map((c) => `${c.name}: ${c.up ? 'up' : 'DOWN'}`).join(' · ')
+            }>
+              {health.healthy ? 'monitoring healthy' : 'component down'}
+            </span>
+          )}
+          <span className={`badge ${net?.running ? 'ok' : 'danger'}`}>
+            AdGuard {net?.running ? `up · ${net.version ?? ''}` : 'unreachable'}
+          </span>
+        </div>
       </div>
 
       <div className="grid cards">

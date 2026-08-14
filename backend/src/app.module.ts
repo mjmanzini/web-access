@@ -15,6 +15,7 @@ import { ActivityModule } from './activity/activity.module';
 import { BandwidthModule } from './bandwidth/bandwidth.module';
 import { RequestsModule } from './requests/requests.module';
 import { ReportsModule } from './reports/reports.module';
+import { HealthModule } from './health/health.module';
 import { SchedulesModule } from './schedules/schedules.module';
 
 @Module({
@@ -38,6 +39,7 @@ import { SchedulesModule } from './schedules/schedules.module';
     BandwidthModule,
     RequestsModule,
     ReportsModule,
+    HealthModule,
     SchedulesModule,
   ],
   controllers: [AppController],

@@ -61,6 +61,10 @@ services:
       AUTH_ADMIN_USERNAME: ${AUTH_ADMIN_USERNAME:-admin}
       AUTH_ADMIN_PASSWORD: ${AUTH_ADMIN_PASSWORD:?set AUTH_ADMIN_PASSWORD in .env (never commit it)}
       ACTIVITY_RETENTION_DAYS: ${ACTIVITY_RETENTION_DAYS:-14}
+      # Offline detection / heartbeat.
+      HEARTBEAT_INTERVAL_SEC: ${HEARTBEAT_INTERVAL_SEC:-60}
+      HEARTBEAT_FAIL_THRESHOLD: ${HEARTBEAT_FAIL_THRESHOLD:-3}
+      HEARTBEAT_PING_URL: ${HEARTBEAT_PING_URL:-}
       # Optional router (firewall enforcement + bandwidth). Off unless set.
       ROUTER_PROVIDER: ${ROUTER_PROVIDER:-none}
       OPENWRT_URL: ${OPENWRT_URL:-http://192.168.1.1}

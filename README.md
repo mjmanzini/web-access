@@ -29,6 +29,9 @@ on your own hardware.
   (bedtime), enforced on a cron heartbeat.
 - **Real-time alerting** — WebSocket feed to the dashboard plus an optional
   outbound webhook on blocked access, bypass attempts, and new devices.
+- **Offline detection** — a heartbeat alerts you if AdGuard/the router goes
+  unreachable (filter down), plus an optional dead-man's-switch ping so an
+  external monitor catches the whole box losing power.
 - **Everyday controls** — an "ask to unblock" request queue (kid requests a
   domain, parent approves → allow rule), **bonus time** and one-tap **pause all**,
   per-profile **screen-time reports** (7-day usage + top domains), a **weekly
@@ -114,7 +117,16 @@ to add per-device **bandwidth**, **true internet cutoffs** at the firewall, and
 **bypass containment** (force DNS→AdGuard, drop DoT/known-DoH/VPN). It's fully
 optional — the app runs AdGuard-only by default.
 
-To enable, on the router: install `uhttpd-mod-ubus` (the `/ubus` endpoint), grant
+> **Router compatibility.** The router features require **OpenWrt** (the ubus
+> API + nftables). Stock ISP/consumer routers — Huawei, TP-Link factory
+> firmware, etc. — don't expose these, so `ROUTER_PROVIDER=openwrt` won't apply
+> to them. On such a router you have two paths: (a) run **AdGuard-only** — still
+> fully functional; just set the router's DHCP DNS to the AdGuard box as the
+> *only* resolver — or (b) add a cheap OpenWrt device (or flash a supported one)
+> inline as the network's router/gateway to unlock firewall cutoffs, bandwidth,
+> and VPN containment.
+
+To enable (OpenWrt only): install `uhttpd-mod-ubus` (the `/ubus` endpoint), grant
 the API user rpcd `file` (read + exec) ACLs, and install `nlbwmon` for bandwidth.
 Then set in `.env`:
 

@@ -94,6 +94,18 @@ export interface ProfileReport {
   topDomains: Array<{ domain: string; hits: number }>;
 }
 
+export interface SystemHealth {
+  healthy: boolean;
+  components: Array<{
+    name: string;
+    up: boolean;
+    fails: number;
+    lastOkAt: string | null;
+    downSince: string | null;
+  }>;
+  deadManPing: { url: boolean; lastPingAt: string | null };
+}
+
 export interface Alert {
   type:
     | 'blocked_access'
@@ -101,7 +113,9 @@ export interface Alert {
     | 'mac_randomized'
     | 'quota_exceeded'
     | 'bedtime_pause'
-    | 'device_new';
+    | 'device_new'
+    | 'system_down'
+    | 'system_recovered';
   severity: 'info' | 'warning' | 'critical';
   message: string;
   profileId?: string | null;

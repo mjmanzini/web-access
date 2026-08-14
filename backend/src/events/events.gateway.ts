@@ -14,7 +14,9 @@ export type AlertType =
   | 'mac_randomized' // new randomized-MAC device appeared
   | 'quota_exceeded' // profile hit its daily limit
   | 'bedtime_pause' // schedule paused a profile
-  | 'device_new'; // previously unseen device joined
+  | 'device_new' // previously unseen device joined
+  | 'system_down' // a component (AdGuard/router) went unreachable
+  | 'system_recovered'; // a component came back
 
 export interface Alert {
   type: AlertType;
