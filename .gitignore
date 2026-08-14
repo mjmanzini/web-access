@@ -4,6 +4,20 @@
 !.env.example
 .env*.local
 
+# Keys, certificates, and credential material (never commit)
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+*.jks
+*.p8
+**/certs/
+*.keystore
+service-account*.json
+credentials*.json
+secrets*.json
+
 # Dependencies and build outputs
 **/node_modules/
 **/dist/
