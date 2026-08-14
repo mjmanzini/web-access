@@ -77,12 +77,6 @@ abstracts both):
 See [IMPLEMENTATION-PLAN.md](IMPLEMENTATION-PLAN.md) for indexes and access
 rules.
 
-The imported mobile schema and the current server model are reconciled in
-[SUPABASE-RECONCILIATION.md](SUPABASE-RECONCILIATION.md).
-
-The mobile client translation layer for this backend lives in
-[MOBILE-BACKEND-CONTRACT.md](MOBILE-BACKEND-CONTRACT.md).
-
 ## 5. Phasing summary
 
 | Phase | What                                            | Status |
