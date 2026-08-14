@@ -1,0 +1,45 @@
+name: Deploy dashboard (Cloudflare Pages)
+
+# Opt-in: this job only runs when the repo variable CLOUDFLARE_DEPLOY == 'true',
+# so it never breaks CI for forks/clones that don't use Cloudflare.
+#
+# Required to enable (Settings → Secrets and variables → Actions):
+#   Variable  CLOUDFLARE_DEPLOY   = true
+#   Variable  VITE_API_BASE       = https://<your-api-tunnel-host>   (backend URL)
+#   Secret    CLOUDFLARE_API_TOKEN   (Pages:Edit permission)
+#   Secret    CLOUDFLARE_ACCOUNT_ID
+#
+# Alternative (no token needed): connect the repo in the Cloudflare Pages
+# dashboard — see infra/cloudflare/README.md.
+
+on:
+  push:
+    branches: [main]
+    paths: ['frontend/**', '.github/workflows/deploy-cloudflare.yml']
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    if: ${{ vars.CLOUDFLARE_DEPLOY == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Build dashboard
+        working-directory: frontend
+        env:
+          VITE_API_BASE: ${{ vars.VITE_API_BASE }}
+        run: |
+          npm ci
+          npm run build
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: frontend
+          command: pages deploy dist --project-name=home-guardian --branch=main
