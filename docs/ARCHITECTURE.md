@@ -1,122 +1,176 @@
-# Unified PWA — Architecture & Folder Structure
+# Home Guardian — Architecture
 
-A single PWA that combines WhatsApp-style real-time comms (chat / voice / video)
-with TeamViewer-style remote desktop, built on the existing
-`signaling-server` + `web-client` + `host-electron` stack.
+Home Wi-Fi monitoring + parental control. The backend is the brain and the
+**database is the source of truth**; AdGuard Home is the enforcement point that
+the backend continuously reconciles to. No custom packet sniffing — all
+visibility and control flow through the DNS layer's API.
 
-## Folder Structure (target)
+## 1. System data flow
 
 ```
-web-access/
-├── docs/
-│   ├── ARCHITECTURE.md             # this file
-│   ├── DEPLOY-CLOUDFLARE.md        # step-by-step Cloudflare guide
-│   └── schema.sql                  # PostgreSQL schema
-│
-├── web-client/                     # Next.js PWA (frontend)
-│   ├── app/
-│   │   ├── layout.tsx              # ThemeProvider, AuthProvider, SW registration
-│   │   ├── globals.css             # CSS variables for light/dark/system
-│   │   ├── (auth)/
-│   │   │   ├── onboarding/page.tsx # name + email/phone (frictionless)
-│   │   │   └── login/page.tsx      # password + WebAuthn passkey
-│   │   ├── (app)/
-│   │   │   ├── chat/               # WhatsApp-style: contacts left, thread right
-│   │   │   │   ├── layout.tsx      # 2-pane responsive layout
-│   │   │   │   ├── page.tsx        # contact list (mobile: full screen)
-│   │   │   │   └── [contactId]/page.tsx  # active thread + call bar
-│   │   │   ├── call/page.tsx       # full-screen voice/video session
-│   │   │   └── remote/             # TeamViewer-style dashboard
-│   │   │       ├── page.tsx        # "Your ID / PIN" + "Partner ID" connect
-│   │   │       └── [sessionId]/page.tsx  # remote screen viewer
-│   │   └── api/                    # Next route handlers (BFF)
-│   │       ├── auth/
-│   │       │   ├── webauthn/register/route.ts
-│   │       │   └── webauthn/authenticate/route.ts
-│   │       └── contacts/route.ts
-│   ├── components/
-│   │   ├── theme/ThemeProvider.tsx
-│   │   ├── chat/{ContactList,MessageList,Composer,PresenceDot}.tsx
-│   │   ├── call/{CallBar,VideoTile,ControlsTray}.tsx
-│   │   └── remote/{IdCard,PartnerConnect,RemoteCanvas,InputCapture}.tsx
-│   ├── lib/
-│   │   ├── auth/webauthn-client.ts # navigator.credentials wrappers
-│   │   ├── call-client.ts          # (existing) WebRTC/mediasoup
-│   │   ├── chat-client.ts          # Socket.IO chat namespace
-│   │   ├── remote-client.ts        # remote-desktop signaling + input encoder
-│   │   └── theme.ts                # light/dark/system CSS-var switcher
-│   ├── public/
-│   │   ├── manifest.webmanifest    # PWA manifest
-│   │   ├── sw.js                   # service worker (cache + offline shell)
-│   │   └── icons/
-│   └── ...
-│
-├── signaling-server/               # Node + Socket.IO + mediasoup + Postgres
-│   ├── src/
-│   │   ├── server.js               # HTTP/HTTPS bootstrap
-│   │   ├── db.js                   # pg pool + migrations runner
-│   │   ├── users.js                # user directory
-│   │   ├── auth/
-│   │   │   ├── webauthn.js         # @simplewebauthn/server flows
-│   │   │   └── sessions.js         # JWT/opaque token issue+verify
-│   │   ├── chat/
-│   │   │   ├── messages.js         # persist + fan-out
-│   │   │   └── presence.js         # online / typing / last_seen
-│   │   ├── call-signaling.js       # (existing)
-│   │   ├── mediasoup-room.js       # (existing) SFU rooms
-│   │   ├── remote/
-│   │   │   ├── sessions.js         # PIN issue / partner-id lookup
-│   │   │   └── input-relay.js      # validated input event relay
-│   │   └── signaling.js            # Socket.IO namespaces wiring
-│   └── migrations/
-│       └── 001_init.sql            # = docs/schema.sql
-│
-├── host-electron/                  # remote-desktop host (existing)
-│
-└── infra/
-    ├── docker-compose.yml          # signaling + web-client + postgres + coturn
-    ├── Caddyfile                   # TLS in front of signaling + web
-    ├── cloudflare/
-    │   ├── pages.toml              # Cloudflare Pages build config
-    │   ├── _headers                # security headers for Pages
-    │   ├── _redirects              # SPA fallback
-    │   └── wrangler.toml           # (optional) Workers/Tunnel config
-    └── coturn/turnserver.conf
+                         ┌───────────────────────────────────────────┐
+                         │                Home LAN                     │
+   Kids' / family        │                                             │
+   devices  ──DNS(53)──► │  AdGuard Home  ──query log / clients API──┐ │
+   (phone, tablet,       │   (DNS sinkhole,                          │ │
+    console)             │    SafeSearch, categories,                │ │
+        ▲                │    per-client rules)                      │ │
+        │ enforce        │        ▲                                  ▼ │
+        │ (block/allow,  │        │ control API (REST, Basic auth)   ▲ │
+        │  pause)        │        │                                  │ │
+        │                │  ┌─────┴───────────────┐   ┌──────────────┴┐│
+        └────────────────┼──│  NestJS API         │◄─►│  PostgreSQL    ││
+                         │  │  (profiles/devices/ │   │  (TypeORM)     ││
+                         │  │   rules/activity/   │   └───────────────┘│
+                         │  │   schedules + cron) │                    │
+                         │  └─────────┬───────────┘                    │
+                         └────────────┼────────────────────────────────┘
+                                      │ REST /api  +  WebSocket /socket.io
+                                      ▼
+                        React + TS dashboard (Cloudflare Pages)
+                        reached remotely via Cloudflare Tunnel + Access
 ```
 
-## Real-time Topology
+Loops that keep the system live (all in `SchedulerService`):
 
-| Channel              | Transport                  | Server module                       |
-|----------------------|----------------------------|-------------------------------------|
-| Auth / REST          | HTTPS (Next API + signaling REST) | `web-client/app/api/*`, signaling Express routes |
-| Presence + typing    | Socket.IO `/presence`      | `chat/presence.js`                  |
-| Text chat            | Socket.IO `/chat` + Postgres `chat_messages` | `chat/messages.js` |
-| Voice/video calls    | WebRTC P2P (1:1) / mediasoup SFU (group) | `call-signaling.js`, `mediasoup-room.js` |
-| Remote desktop video | WebRTC DataChannel + video track from host | `remote/sessions.js` |
-| Remote input         | WebRTC DataChannel (ordered, reliable) | host-electron `input-executor.js` |
+- **every 30s** — pull AdGuard query log → persist `ActivityLog`, map to device/
+  profile by client IP, emit `blocked_access` / `bypass_attempt` alerts.
+- **every 2m** — pull AdGuard clients + DHCP leases → upsert `Device`, flag
+  randomized MACs, emit `device_new` / `mac_randomized` alerts.
+- **every 1m** — evaluate `Schedule` windows + daily quotas → pause/resume
+  profiles (manual pause always wins).
 
-NAT traversal: STUN + coturn (already in `infra/coturn/`). TURN credentials are
-short-lived, minted by the signaling server per session.
+Any dashboard action (block a domain, assign a device, pause a profile) writes
+the DB then calls the provider so AdGuard immediately matches.
 
-## Theming
+## 2. Database schema (TypeORM entities)
 
-`globals.css` exposes CSS variables; `ThemeProvider` toggles `data-theme` on
-`<html>`. `prefers-color-scheme` is the default.
+| Entity | Table | Purpose | Key columns |
+|--------|-------|---------|-------------|
+| `Profile` | `profiles` | A person; groups devices under one policy | `blockedCategories[]`, `safeSearchEnforced`, `youtubeRestricted`, `blockDnsBypass`, `dailyTimeLimitMinutes`, `internetPaused`, `pausedReason` |
+| `Device` | `devices` | One tracked device | `ipAddress`, `macAddress`, `macRandomized`, `isOnline`, `blocked`, `profileId → profiles` |
+| `Rule` | `rules` | A filtering rule | `type(domain\|category)`, `value`, `action(block\|allow)`, `scope(global\|profile\|device)`, `profileId`, `deviceId`, `syncedAt` |
+| `ActivityLog` | `activity_logs` | One DNS query (activity feed) | `timestamp`, `clientIp`, `deviceId`, `profileId`, `domain`, `action`, `category` — indexed on `timestamp`, `(deviceId,timestamp)`, `domain` |
+| `Schedule` | `schedules` | Recurring block window (bedtime) | `daysOfWeek[]`, `startTime`, `endTime`, `profileId` |
+| `DailyUsage` | `daily_usage` | Accrued active minutes/day for quotas | unique `(profileId, date)`, `usedMinutes` |
+| `ActivityRollup` | `activity_rollups` | Daily aggregate kept after raw pruning | PK `(date, profileId, domain, action)`, `hits` |
+| `AdminUser` | `admin_users` | Dashboard admin (parent) login | `username`, `passwordHash` (bcrypt) |
+| `DeviceUsage` | `device_usage` | Daily per-device bandwidth (router) | unique `(deviceId, date)`, `rxBytes`, `txBytes` |
+| `AccessRequest` | `access_requests` | "Ask to unblock" queue | `domain`, `status`, `deviceId`, `profileId` |
 
-```css
-:root[data-theme='light'] { --bg:#fff; --fg:#111; --accent:#25d366; --panel:#f0f2f5; }
-:root[data-theme='dark']  { --bg:#0b141a; --fg:#e9edef; --accent:#00a884; --panel:#202c33; }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) { color-scheme: dark; --bg:#0b141a; --fg:#e9edef; --accent:#00a884; --panel:#202c33; }
-}
-```
+Relationships: `Profile 1─* Device`, `Profile 1─* Rule`, `Profile 1─* Schedule`,
+`Device 1─* Rule`. `Device.profileId` is `SET NULL` on profile delete; rules
+cascade. Entities live in `backend/src/entities/`. Dev uses TypeORM
+`synchronize`; for production, generate migrations and turn it off.
 
-## Security boundaries
+## 3. Network integration strategy (AdGuard Home)
 
-- All Socket.IO connections require a bearer token (issued at login or via
-  WebAuthn assertion) verified in `io.use()` middleware.
-- Remote-desktop sessions require the host to have *consented* via a 6-digit
-  PIN with TTL = 5 min, single-use; brute-force protected with rate limiting.
-- Input events are validated server-side against a session's allowed scope
-  (no host filesystem APIs over the wire — only synthetic input).
-- Database access is server-only; Postgres is never exposed publicly.
+The backend never touches AdGuard's wire format directly. Three layers:
+
+1. **`AdguardApiClient`** (`network/adguard/adguard.client.ts`) — typed HTTP over
+   the control API (`/control/*`, HTTP Basic auth). Knows only AdGuard shapes.
+2. **`AdguardService`** (`network/adguard/adguard.service.ts`) — implements the
+   vendor-neutral **`NetworkProvider`** interface. Compiles app concepts into
+   AdGuard calls.
+3. **Feature services** depend only on `NETWORK_PROVIDER`. Swapping to Pi-hole or
+   OpenWrt = one new provider class + one binding in `network.module.ts`.
+
+Mapping app policy → AdGuard:
+
+| App concept | AdGuard mechanism | API call |
+|-------------|-------------------|----------|
+| Profile | a **client** named `hg-<profileId>` with `ids` = its devices' MAC/IP | `POST /control/clients/{add,update}` |
+| Block category (social/gaming/video) | client `blocked_services` ids | client update |
+| Block category (adult) | client `parental_enabled` | client update |
+| Block category (gambling) | hosted blocklist filter | `POST /control/filtering/add_url` |
+| SafeSearch + YouTube Restricted | client `safe_search.{enabled,youtube,…}` | client update |
+| Block a domain (per profile) | user rule `\|\|domain^$client='hg-<id>'` | `POST /control/filtering/set_rules` |
+| Block a domain (everyone) | user rule `\|\|domain^` | `POST /control/filtering/set_rules` |
+| Pause / bedtime / quota cutoff | add device ids to **disallowed_clients** | `POST /control/access/set` |
+| Anti-bypass (DoH/DoT) | user rules blocking public DoH resolvers + Firefox canary | `POST /control/filtering/set_rules` |
+| Activity feed | query log | `GET /control/querylog` |
+| Device discovery | clients + DHCP leases (IP↔MAC↔hostname) | `GET /control/clients`, `/control/dhcp/status` |
+
+**Managed user_rules are fenced.** `AdguardService` only ever rewrites the block
+of `user_rules` below a `# home-guardian:managed` marker, split into per-client
+buckets, so admin-authored rules and other profiles are never clobbered.
+
+**Bypass defense, honestly scoped.** DNS-layer rules stop the easy escapes
+(public DoH hostnames, Firefox's `use-application-dns.net` canary, forced
+SafeSearch). The *complete* defense also needs router firewall rules the DNS
+layer can't do — block outbound TCP 853 (DoT), redirect/hijack outbound port 53
+to AdGuard, and block known VPN ports/DoH IP ranges. That belongs to a future
+**OpenWrt provider** implementing the same `NetworkProvider` interface; the
+architecture already has the seam for it.
+
+## 4. Device identity (why controls don't drift)
+
+Parental controls are only as good as the appliance's ability to keep attaching
+a policy to the *same* device. Three identifiers, most-stable first, are emitted
+for every device (`ProfilesService.identifiersFor`) and used both as AdGuard
+client `ids` and in the hard-block (disallowed-clients) list:
+
+1. **ClientID** — a stable slug (`Device.clientId`) the device embeds in its
+   encrypted-DNS endpoint (DoT/DoH/DoQ). Fully IP-independent and immune to MAC
+   randomization. `GET /api/devices/:id/dns-setup` returns the DoT/DoH/DoQ URLs
+   (built from `ADGUARD_DNS_DOMAIN` + the ClientID) to configure on the device.
+   This is the gold-standard anchor.
+2. **MAC** — used when non-randomized; reliable when AdGuard is your DHCP server
+   (it then knows IP↔MAC). A **randomized** ("private") MAC is skipped as an
+   identifier and flagged in the UI, because it isn't stable.
+3. **IP** — last-resort fallback for plain-DNS LANs; churns with DHCP, so it's
+   only ever additive, never the sole anchor.
+
+Emitting all three means enforcement holds however the device currently reaches
+AdGuard. The dashboard marks a device **stable** once it has a ClientID (or a
+real MAC) and **IP-only** when it has neither, so you can see which devices can
+still slip controls. New devices get a ClientID on discovery; older rows are
+backfilled on boot.
+
+## 5. Security & data retention
+
+- **Auth (fail-closed).** A global `JwtAuthGuard` (`APP_GUARD`) requires a valid
+  Bearer JWT on every route except those marked `@Public()` (login, health). The
+  Socket.IO gateway verifies the same JWT in its handshake and disconnects
+  unauthenticated sockets. A single parent/admin is seeded from
+  `AUTH_ADMIN_USERNAME` / `AUTH_ADMIN_PASSWORD` on first boot (bcrypt-hashed);
+  password change is available in-app. Tokens are signed with `JWT_SECRET`. For
+  remote access, keep **Cloudflare Access** in front as the outer layer.
+- **Retention.** `RetentionService` runs nightly: it aggregates raw
+  `activity_logs` older than `ACTIVITY_RETENTION_DAYS` (default 14) into
+  `activity_rollups` (idempotent upsert on the natural key), then deletes the raw
+  rows. Recent detail stays queryable; long-range history lives in the rollups
+  (`GET /api/activity/history`), and the raw table stays bounded.
+
+## 6. Router provider (optional, complements AdGuard)
+
+DNS filtering can't do everything: a hardcoded resolver or a VPN walks past it.
+A **`RouterProvider`** (separate from `NetworkProvider`, off by default) adds the
+router-level enforcement AdGuard can't — and it's what makes "bandwidth" real.
+Bound by `ROUTER_PROVIDER` env: `openwrt` → `OpenWrtService` (ubus-over-HTTP),
+anything else → `NullRouterProvider` (no-op, so AdGuard-only setups are
+unaffected).
+
+| Capability | How | Used by |
+|-----------|-----|---------|
+| Authoritative device discovery | DHCP leases (`/tmp/dhcp.leases`) | merged into device sync (MAC-authoritative) |
+| Per-device **bandwidth** | `nlbwmon` counters, diffed into daily `DeviceUsage` | `BandwidthService` → `GET /api/bandwidth`, Devices page |
+| **True internet cutoff** | nftables MAC drop-set in a fenced `inet home_guardian` table | `syncBlockedIdentifiers` (pause/bedtime/quota) — alongside AdGuard's DNS block |
+| **Bypass containment** | nft rules: force DNS→AdGuard, drop DoT 853, known-DoH IPs, common VPN ports | `POST /api/router/containment` |
+
+All router state lives in one dedicated nft table so it's fenced from OpenWrt's
+own `fw4` ruleset. Everything is best-effort and defensive: a router blip
+degrades to empty results, never a crash. Requires `uhttpd-mod-ubus`, rpcd `file`
+(read/exec) ACLs for the API user, and `nlbwmon` for bandwidth — see README.
+
+Adding a different router (pfSense, EdgeOS, …) is one new class implementing
+`RouterProvider` plus a branch in `router.module.ts`.
+
+## 7. Extending
+
+- **New enforcement backend:** implement `NetworkProvider`, bind it in
+  `network.module.ts`. Nothing else changes.
+- **New category:** add an entry to `common/categories.ts` (services / parental /
+  blocklistUrl) — the UI and enforcement pick it up.
+- **Outbound notifications:** `EventsGateway.emitAlert()` already posts to
+  `ALERT_WEBHOOK_URL`; add Slack/Discord/ntfy formatting there.

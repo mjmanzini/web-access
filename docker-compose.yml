@@ -1,66 +1,101 @@
-version: '3.9'
-
+# Home Guardian — local / home-server orchestration.
+#
+# This whole stack runs ON the home network (a Pi, NAS, or mini-PC): AdGuard is
+# the LAN's DNS server, the API orchestrates it, Postgres stores state, and the
+# web dashboard is served locally. To reach the dashboard securely from outside
+# the house, the optional `cloudflared` service publishes it via Cloudflare
+# Tunnel (no open ports) — see docs/ARCHITECTURE.md and infra/cloudflare/.
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: web-access-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-webaccess}
-      POSTGRES_USER: ${POSTGRES_USER:-webaccess}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-webaccess}
-    ports:
-      - "5432:5432"
+      POSTGRES_DB: ${POSTGRES_DB:-guardian}
+      POSTGRES_USER: ${POSTGRES_USER:-guardian}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (never commit it)}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - pg_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-webaccess} -d ${POSTGRES_DB:-webaccess}"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-guardian}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-  adminer:
-    image: adminer:4
-    container_name: web-access-adminer
+  adguardhome:
+    image: adguard/adguardhome:latest
     restart: unless-stopped
-    depends_on: [postgres]
-    ports:
-      - "8080:8080"
-    environment:
-      ADMINER_DEFAULT_SERVER: postgres
-
-  # Unified HTTPS reverse proxy. Routes:
-  #   /socket.io, /users*, /ice, /pair*, /healthz  -> signaling (host:4000)
-  #   everything else                               -> web-client (host:3000)
-  # This way the phone (and Cloudflare quick-tunnel) only needs ONE URL
-  # and the browser treats signaling as "same origin" — no CORS, no mixed
-  # content, and the client can use relative URLs.
-  caddy:
-    image: caddy:2-alpine
-    container_name: web-access-caddy
-    restart: unless-stopped
-    ports:
-      - "8443:8443"    # HTTPS
-      - "8088:8088"    # HTTP (used by cloudflared quick-tunnel)
     volumes:
-      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    extra_hosts:
-      # Let the container reach services on the Windows host.
-      - "host.docker.internal:host-gateway"
+      - adguard_work:/opt/adguardhome/work
+      - adguard_conf:/opt/adguardhome/conf
+    ports:
+      - "53:53/tcp"     # DNS — point your router's DHCP DNS here
+      - "53:53/udp"
+      - "3000:3000/tcp" # First-run setup wizard (one time)
+      - "8080:80/tcp"   # Admin UI + control API after setup
+      # On first run: open http://<host>:3000, set the admin web port to 80 and
+      # create the admin user/password you put in ADGUARD_USERNAME/PASSWORD.
+      # See infra/adguard/AdGuardHome.example.yaml for recommended settings.
 
-  # Optional: cloudflared quick-tunnel for public HTTPS URL over LTE.
-  # Start it manually with:  docker compose --profile tunnel up cloudflared
+  api:
+    build: ./backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-guardian}
+      POSTGRES_USER: ${POSTGRES_USER:-guardian}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (never commit it)}
+      ADGUARD_URL: http://adguardhome:80
+      ADGUARD_USERNAME: ${ADGUARD_USERNAME:-admin}
+      ADGUARD_PASSWORD: ${ADGUARD_PASSWORD:?set ADGUARD_PASSWORD in .env (never commit it)}
+      # Public DNS hostname of your AdGuard server (for per-device DoT/DoH
+      # ClientID endpoints). Optional; leave blank to skip encrypted-DNS setup.
+      ADGUARD_DNS_DOMAIN: ${ADGUARD_DNS_DOMAIN:-}
+      # Dashboard auth: JWT signing secret + the seeded parent admin login.
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (never commit it)}
+      AUTH_ADMIN_USERNAME: ${AUTH_ADMIN_USERNAME:-admin}
+      AUTH_ADMIN_PASSWORD: ${AUTH_ADMIN_PASSWORD:?set AUTH_ADMIN_PASSWORD in .env (never commit it)}
+      ACTIVITY_RETENTION_DAYS: ${ACTIVITY_RETENTION_DAYS:-14}
+      # Optional router (firewall enforcement + bandwidth). Off unless set.
+      ROUTER_PROVIDER: ${ROUTER_PROVIDER:-none}
+      OPENWRT_URL: ${OPENWRT_URL:-http://192.168.1.1}
+      OPENWRT_USERNAME: ${OPENWRT_USERNAME:-root}
+      OPENWRT_PASSWORD: ${OPENWRT_PASSWORD:-}
+      ADGUARD_LAN_IP: ${ADGUARD_LAN_IP:-}
+      CORS_ORIGIN: ${CORS_ORIGIN:-*}
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+    ports:
+      - "3001:3001"
+
+  web:
+    build: ./frontend
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "5173:5173"
+
+  # Optional: expose the dashboard via Cloudflare Tunnel (no inbound ports).
+  # Set TUNNEL_TOKEN in .env and run `docker compose --profile cloudflare up -d`.
   cloudflared:
     image: cloudflare/cloudflared:latest
-    container_name: web-access-cloudflared
     restart: unless-stopped
-    profiles: ["tunnel"]
-    command: tunnel --no-autoupdate --url http://caddy:8088
-    depends_on: [caddy]
+    profiles: ["cloudflare"]
+    command: tunnel --no-autoupdate run
+    environment:
+      # Provided by the Cloudflare Tunnel (Zero Trust dashboard), kept in .env on
+      # the host — never committed. Optional here so the base stack runs without
+      # it; required only when you enable this `cloudflare` profile.
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
+    depends_on:
+      - web
 
 volumes:
-  postgres_data:
-  caddy_data:
-  caddy_config:
+  pg_data:
+  adguard_work:
+  adguard_conf:
