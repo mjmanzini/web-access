@@ -1,0 +1,124 @@
+import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { Device } from '../entities/device.entity';
+import {
+  NETWORK_PROVIDER,
+  NetworkProvider,
+} from '../network/network-provider.interface';
+import { EventsGateway } from '../events/events.gateway';
+import { ProfilesService } from '../profiles/profiles.service';
+import { isRandomizedMac, normalizeMac } from '../common/mac.util';
+import { UpdateDeviceDto } from './dto/device.dto';
+
+/**
+ * Owns the device inventory. `syncFromNetwork()` is the reconciliation entry
+ * point: it pulls what the appliance sees, upserts each device, flags MAC
+ * randomization, and raises alerts for brand-new / evasive devices. Called on a
+ * schedule (SchedulerService) and on-demand from the controller.
+ */
+@Injectable()
+export class DevicesService {
+  private readonly logger = new Logger(DevicesService.name);
+
+  constructor(
+    @InjectRepository(Device) private devices: Repository<Device>,
+    @Inject(NETWORK_PROVIDER) private network: NetworkProvider,
+    private events: EventsGateway,
+    private profiles: ProfilesService,
+  ) {}
+
+  findAll(): Promise<Device[]> {
+    return this.devices.find({
+      relations: { profile: true },
+      order: { lastSeenAt: 'DESC' },
+    });
+  }
+
+  async findOne(id: string): Promise<Device> {
+    const device = await this.devices.findOne({
+      where: { id },
+      relations: { profile: true },
+    });
+    if (!device) throw new NotFoundException(`Device ${id} not found`);
+    return device;
+  }
+
+  /**
+   * Pull the network layer's device list and reconcile it into the DB.
+   * Returns a summary for the controller/log. Idempotent.
+   */
+  async syncFromNetwork(): Promise<{ discovered: number; created: number }> {
+    const discovered = await this.network.discoverDevices();
+    let created = 0;
+
+    for (const d of discovered) {
+      const mac = normalizeMac(d.mac);
+      // Match on MAC first (stable), else on IP.
+      const existing = mac
+        ? await this.devices.findOne({ where: { macAddress: mac } })
+        : await this.devices.findOne({ where: { ipAddress: d.ip } });
+
+      if (existing) {
+        existing.ipAddress = d.ip || existing.ipAddress;
+        existing.isOnline = d.online;
+        existing.lastSeenAt = d.lastSeen ?? new Date();
+        if (mac) {
+          existing.macAddress = mac;
+          existing.macRandomized = isRandomizedMac(mac);
+        }
+        await this.devices.save(existing);
+        continue;
+      }
+
+      const randomized = isRandomizedMac(mac);
+      const device = this.devices.create({
+        name: d.name || d.ip,
+        ipAddress: d.ip,
+        macAddress: mac,
+        macRandomized: randomized,
+        isOnline: d.online,
+        lastSeenAt: d.lastSeen ?? new Date(),
+      });
+      const saved = await this.devices.save(device);
+      created++;
+
+      // Alert: a new device joined the network.
+      this.events.emitAlert({
+        type: randomized ? 'mac_randomized' : 'device_new',
+        severity: randomized ? 'warning' : 'info',
+        message: randomized
+          ? `New device "${saved.name}" (${d.ip}) is using a RANDOMIZED MAC — it can evade MAC-based controls.`
+          : `New device "${saved.name}" (${d.ip}) joined the network.`,
+        deviceId: saved.id,
+        at: new Date().toISOString(),
+      });
+    }
+
+    this.logger.log(
+      `Device sync: ${discovered.length} discovered, ${created} new`,
+    );
+    return { discovered: discovered.length, created };
+  }
+
+  async update(id: string, dto: UpdateDeviceDto): Promise<Device> {
+    const device = await this.findOne(id);
+    const profileChanged =
+      dto.profileId !== undefined && dto.profileId !== device.profileId;
+
+    Object.assign(device, dto);
+    const saved = await this.devices.save(device);
+
+    // Re-push affected profile policies so the appliance matches the new grouping.
+    if (profileChanged) {
+      if (device.profileId) await this.profiles.syncProfile(device.profileId);
+      if (dto.profileId) await this.profiles.syncProfile(dto.profileId);
+    }
+    if (dto.blocked !== undefined) {
+      await this.profiles.syncBlockedIdentifiers();
+    } else if (device.profileId) {
+      await this.profiles.syncProfile(device.profileId);
+    }
+    return saved;
+  }
+}

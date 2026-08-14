@@ -1,0 +1,35 @@
+import { Module } from '@nestjs/common';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { ScheduleModule } from '@nestjs/schedule';
+import { buildTypeOrmOptions } from './config/typeorm.config';
+import { AppController } from './app.controller';
+import { NetworkModule } from './network/network.module';
+import { EventsModule } from './events/events.module';
+import { ProfilesModule } from './profiles/profiles.module';
+import { DevicesModule } from './devices/devices.module';
+import { RulesModule } from './rules/rules.module';
+import { ActivityModule } from './activity/activity.module';
+import { SchedulesModule } from './schedules/schedules.module';
+
+@Module({
+  imports: [
+    ConfigModule.forRoot({ isGlobal: true }),
+    TypeOrmModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: buildTypeOrmOptions,
+    }),
+    ScheduleModule.forRoot(),
+    // Infrastructure (global): network provider + realtime events.
+    NetworkModule,
+    EventsModule,
+    // Features.
+    ProfilesModule,
+    DevicesModule,
+    RulesModule,
+    ActivityModule,
+    SchedulesModule,
+  ],
+  controllers: [AppController],
+})
+export class AppModule {}
