@@ -84,6 +84,17 @@ export default function Profiles() {
                 paused · {p.pausedReason}
               </div>
             )}
+            {/* A manual resume outranks bedtime/quota until they'd have ended
+                anyway — say so, or it looks like the schedule was deleted. */}
+            {!p.internetPaused && p.overrideUntil && (
+              <div className="badge warn" style={{ marginBottom: 10 }}>
+                resumed by you · bedtime overridden until{' '}
+                {new Date(p.overrideUntil).toLocaleTimeString([], {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })}
+              </div>
+            )}
 
             <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>Blocked categories</div>
             <div className="row" style={{ marginBottom: 12 }}>

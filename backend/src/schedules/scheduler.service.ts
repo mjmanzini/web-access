@@ -61,6 +61,15 @@ export class SchedulerService {
       // Manual pause is sticky — automation never overrides a human decision.
       if (profile.internetPaused && profile.pausedReason === 'manual') continue;
 
+      // Nor does it override a manual *resume*: a parent who lifts bedtime gets
+      // it lifted until that window (or the quota day) would have ended anyway.
+      if (profile.overrideUntil) {
+        if (now < profile.overrideUntil) continue;
+        await this.profiles.update(profile.id, { overrideUntil: null });
+        profile.overrideUntil = null;
+        this.logger.log(`Parent override expired for "${profile.name}" — automation resumed`);
+      }
+
       const used = await this.activity.activeMinutesToday(profile.id);
       const bonus = await this.recordUsage(profile.id, used);
 

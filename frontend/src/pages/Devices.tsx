@@ -114,6 +114,37 @@ export default function Devices() {
     setSetup({ id, data });
   };
 
+  /** Why this device's profile has it offline, if it does. */
+  const profilePause = (d: Device): string | null => {
+    const p = profiles.find((x) => x.id === d.profileId);
+    if (!p?.internetPaused) return null;
+    return p.pausedReason === 'bedtime'
+      ? 'bedtime'
+      : p.pausedReason === 'quota_exceeded'
+        ? 'daily limit'
+        : 'profile paused';
+  };
+
+  /** Lift a profile-level pause — the action that actually restores internet. */
+  const resumeProfile = async (d: Device) => {
+    const p = profiles.find((x) => x.id === d.profileId);
+    if (!p) return;
+    setPending((prev) => new Set(prev).add(d.id));
+    setError('');
+    try {
+      await api.pauseProfile(p.id, false);
+      load();
+    } catch (e) {
+      setError(`Could not resume ${p.name}: ${e instanceof Error ? e.message : 'request failed'}`);
+    } finally {
+      setPending((prev) => {
+        const next = new Set(prev);
+        next.delete(d.id);
+        return next;
+      });
+    }
+  };
+
   // Online first, then devices the parent has organised (named / assigned to a
   // profile), then the rest — so the list reads top-down by relevance.
   const rank = (d: Device) =>
@@ -216,6 +247,17 @@ export default function Devices() {
                     {d.isOnline
                       ? <span className="badge ok">online</span>
                       : <span className="badge muted" title={d.lastSeenAt ?? ''}>offline</span>}
+                    {/* A device can be cut off by its PROFILE rather than by
+                        itself. Without saying so, the device-level Resume
+                        button looks broken: it toggles a flag that isn't the
+                        thing blocking. */}
+                    {profilePause(d) && (
+                      <div style={{ marginTop: 4 }}>
+                        <span className="badge danger" title="Paused by this device's profile">
+                          {profilePause(d)}
+                        </span>
+                      </div>
+                    )}
                     {!d.isOnline && (
                       <div className="muted" style={{ fontSize: 11 }}>{lastSeen(d.lastSeenAt)}</div>
                     )}
@@ -228,6 +270,13 @@ export default function Devices() {
                     <button className="ghost" onClick={() => startRename(d)}>Rename</button>
                     <button className="ghost" onClick={() => showSetup(d.id)}>DNS setup</button>
                     <button className="ghost" onClick={() => forget(d)} title="Remove this entry">Forget</button>
+                    {/* When the profile is what's blocking, offer the action
+                        that actually works. */}
+                    {profilePause(d) && (
+                      <button disabled={pending.has(d.id)} onClick={() => resumeProfile(d)}>
+                        {pending.has(d.id) ? '…' : `Resume ${profilePause(d)}`}
+                      </button>
+                    )}
                     <button
                       className={d.blocked ? '' : 'danger'}
                       disabled={pending.has(d.id)}

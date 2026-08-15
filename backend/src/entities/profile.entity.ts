@@ -65,6 +65,15 @@ export class Profile {
   @Column({ type: 'varchar', nullable: true })
   pausedReason: string | null;
 
+  /**
+   * A parent's manual Resume beats the automation until the restriction it
+   * overrode would naturally have ended (bedtime window end, or the daily quota
+   * reset). Without this the scheduler simply re-paused the profile on its next
+   * minute tick and "Resume" appeared not to work at all.
+   */
+  @Column({ type: 'timestamptz', nullable: true })
+  overrideUntil: Date | null;
+
   // ---- Relations ----
 
   @OneToMany(() => Device, (device) => device.profile)

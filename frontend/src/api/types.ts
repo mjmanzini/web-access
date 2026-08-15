@@ -12,6 +12,8 @@ export interface Profile {
   dailyTimeLimitMinutes: number | null;
   internetPaused: boolean;
   pausedReason: string | null;
+  /** Parent override in force until this time; automation resumes afterwards. */
+  overrideUntil: string | null;
   devices?: Device[];
 }
 
