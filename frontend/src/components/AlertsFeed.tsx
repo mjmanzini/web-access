@@ -5,64 +5,96 @@ import type { Alert } from '../api/types';
 /** Alerts have no server id; this is stable enough to dismiss one. */
 const keyOf = (a: Alert) => `${a.at}|${a.type}|${a.message}`;
 
+const LABEL: Partial<Record<Alert['type'], string>> = {
+  bypass_attempt: 'DNS bypass',
+  mac_randomized: 'Random MAC',
+  device_new: 'New device',
+  quota_exceeded: 'Daily limit',
+  bedtime_pause: 'Bedtime',
+  system_down: 'Offline',
+  system_recovered: 'Back online',
+};
+
 /**
- * Live alert feed.
+ * Live alert tray.
  *
- * On a phone this is the primary surface, so it behaves like a notification
- * tray rather than a floating desktop panel: pinned to the bottom, full width,
- * collapsible to a single bar, individually dismissable, and height-capped so
- * it can never bury the page underneath.
+ * Collapsed to a single bar by default: on a phone the Devices table is the
+ * thing being used, and an expanded tray sits on top of it. Tapping the bar
+ * opens it; it closes again after dismissing everything.
+ *
+ * Dismissal has to cope with a stream. Hiding one alert by key is not enough if
+ * new ones keep arriving — "Clear" therefore also mutes everything raised up to
+ * that moment, so the tray actually empties instead of instantly refilling.
  */
 export default function AlertsFeed() {
   const { alerts, connected } = useAlerts();
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
-  const [collapsed, setCollapsed] = useState(false);
+  const [mutedBefore, setMutedBefore] = useState(0);
+  const [open, setOpen] = useState(false);
 
   const visible = useMemo(
-    () => alerts.filter((a) => !dismissed.has(keyOf(a))).slice(0, 6),
-    [alerts, dismissed],
+    () =>
+      alerts
+        .filter((a) => !dismissed.has(keyOf(a)))
+        .filter((a) => new Date(a.at).getTime() > mutedBefore)
+        .slice(0, 8),
+    [alerts, dismissed, mutedBefore],
   );
 
   if (!visible.length) return null;
 
-  const dismiss = (a: Alert) =>
-    setDismissed((prev) => new Set(prev).add(keyOf(a)));
-  const dismissAll = () =>
-    setDismissed((prev) => {
-      const next = new Set(prev);
-      visible.forEach((a) => next.add(keyOf(a)));
-      return next;
-    });
+  const dismiss = (a: Alert) => {
+    const next = new Set(dismissed);
+    next.add(keyOf(a));
+    setDismissed(next);
+    // Closing the last one collapses the tray rather than leaving an empty box.
+    if (visible.length === 1) setOpen(false);
+  };
+
+  const clearAll = () => {
+    setMutedBefore(Date.now());
+    setDismissed(new Set());
+    setOpen(false);
+  };
+
+  const worst = visible.some((a) => a.severity === 'critical')
+    ? 'critical'
+    : visible.some((a) => a.severity === 'warning')
+      ? 'warning'
+      : 'info';
 
   return (
-    <div className="alerts" role="region" aria-label="Live alerts">
+    <div className={`alerts ${open ? 'open' : ''}`} role="region" aria-label="Live alerts">
       <div className="alerts-bar">
         <button
-          className="alerts-toggle"
-          onClick={() => setCollapsed((v) => !v)}
-          aria-expanded={!collapsed}
+          className={`alerts-toggle ${worst}`}
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
         >
           <span className={`dot ${connected ? 'on' : 'off'}`} />
-          {visible.length} live alert{visible.length === 1 ? '' : 's'}
-          <span className="alerts-chevron">{collapsed ? '▲' : '▼'}</span>
+          {visible.length} alert{visible.length === 1 ? '' : 's'}
+          <span className="alerts-chevron">{open ? '▾' : '▴'}</span>
         </button>
-        <button className="alerts-clear" onClick={dismissAll}>
-          Clear
-        </button>
+        {open && (
+          <button className="alerts-clear" onClick={clearAll}>
+            Clear all
+          </button>
+        )}
       </div>
 
-      {!collapsed && (
+      {open && (
         <div className="alerts-list">
           {visible.map((a) => (
             <div key={keyOf(a)} className={`alert ${a.severity}`}>
               <div className="alert-body">
-                <strong>{a.type.replace(/_/g, ' ')}</strong>
+                <strong>{LABEL[a.type] ?? a.type.replace(/_/g, ' ')}</strong>
                 <div>{a.message}</div>
               </div>
               <button
                 className="alert-dismiss"
                 onClick={() => dismiss(a)}
-                aria-label="Dismiss alert"
+                aria-label="Dismiss"
+                title="Dismiss"
               >
                 ✕
               </button>

@@ -112,17 +112,13 @@ export class ActivityService {
       return;
     }
 
-    if (row.action === 'blocked') {
-      this.events.emitAlert({
-        type: 'blocked_access',
-        severity: 'warning',
-        message: `${device?.name ?? row.clientIp} was blocked from ${row.domain}.`,
-        deviceId: device?.id ?? null,
-        profileId: device?.profileId ?? null,
-        domain: row.domain,
-        at: row.timestamp.toISOString(),
-      });
-    }
+    // A blocked query is not an event worth announcing — it is the system
+    // doing its job, hundreds of times an hour, and during bedtime it is
+    // EVERY query. Alerting on it buried the alerts that matter and made the
+    // feed unreadable. This data already lives in Activity, which is filterable
+    // per device and is the right place to look at it.
+    //
+    // Deliberately no emitAlert here.
   }
 
   // ---- read APIs for the dashboard ----

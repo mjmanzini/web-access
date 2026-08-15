@@ -85,6 +85,8 @@ input, select {
   font-size: 12px; font-weight: 600; padding: 8px 12px;
 }
 .alerts-chevron { margin-left: auto; font-size: 10px; }
+.alerts-toggle.warning { border-color: var(--warn); color: var(--warn); }
+.alerts-toggle.critical { border-color: var(--danger); color: var(--danger); }
 .alerts-clear { background: var(--panel-2); color: var(--muted); border: 1px solid var(--border); font-size: 12px; }
 /* Cap the tray so a burst of alerts can never bury the page beneath it. */
 .alerts-list { display: grid; gap: 8px; max-height: 45vh; overflow-y: auto; }
@@ -96,8 +98,11 @@ input, select {
 }
 .alert-body { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .alert-dismiss {
-  background: transparent; border: 0; color: var(--muted); padding: 2px 6px;
-  font-size: 14px; line-height: 1; flex-shrink: 0;
+  background: transparent; border: 0; color: var(--muted);
+  /* Generous hit area: this is the control reached for most on a phone, and a
+     2px-padded glyph is essentially untappable with a thumb. */
+  padding: 8px 12px; margin: -6px -8px -6px 0;
+  font-size: 16px; line-height: 1; flex-shrink: 0; min-height: 36px;
 }
 .alert.info { border-left-color: var(--accent); }
 .alert.warning { border-left-color: var(--warn); }
@@ -135,9 +140,14 @@ input, select {
   table { min-width: 520px; }
   th, td { padding: 8px 10px; }
 
-  /* Comfortable touch targets. */
+  /* Comfortable touch targets. The dismiss ✕ keeps its own 36px minimum —
+     shrinking it here is what made alerts impossible to close by thumb. */
   button { min-height: 38px; }
-  .alert-dismiss, .alerts-chevron { min-height: 0; }
+  .alerts-chevron { min-height: 0; }
+
+  /* The collapsed tray floats over the page, so leave room for it: without
+     this the last table row sits underneath and can't be reached or tapped. */
+  .main { padding-bottom: 76px; }
   input, select { min-height: 38px; font-size: 16px; } /* 16px stops iOS zooming on focus */
 
   /* Alert tray spans the width and sits above the home indicator. */
