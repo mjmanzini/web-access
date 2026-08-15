@@ -158,6 +158,8 @@ export class DevicesService implements OnModuleInit {
     );
 
     let created = 0;
+    // Set when a device that enforcement depends on changes address.
+    let enforcementStale = false;
 
     for (const d of discovered) {
       const mac = normalizeMac(d.mac);
@@ -182,6 +184,14 @@ export class DevicesService implements OnModuleInit {
         : await this.devices.findOne({ where: { ipAddress: d.ip } });
 
       if (existing) {
+        // Enforcement rules are pinned to the IP (the ClientID only applies
+        // once encrypted DNS is set up). If a blocked device gets a new lease,
+        // its block silently points at the old address until something
+        // re-pushes — so remember that we must.
+        if (d.ip && d.ip !== existing.ipAddress) {
+          enforcementStale =
+            enforcementStale || existing.blocked || !!existing.profileId;
+        }
         existing.ipAddress = d.ip || existing.ipAddress;
         existing.isOnline = d.online;
         existing.lastSeenAt = d.lastSeen ?? new Date();
@@ -292,6 +302,14 @@ export class DevicesService implements OnModuleInit {
     if (stale.length) {
       await this.devices.remove(stale);
       this.logger.log(`Device sync: pruned ${stale.length} non-device entries`);
+    }
+
+    // A moved or newly-created device changes the identifier set that blocking
+    // is written against. Without this, a blocked device that picks up a new
+    // lease keeps its block pinned to the old address and quietly goes free.
+    if (enforcementStale || created) {
+      await this.profiles.syncBlockedIdentifiers();
+      this.logger.log('Device sync: re-pushed enforcement (addresses changed)');
     }
 
     this.logger.log(

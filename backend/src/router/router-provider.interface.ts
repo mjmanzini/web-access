@@ -53,6 +53,17 @@ export interface RouterProvider {
   /** Authoritative IP↔MAC↔hostname from the router's DHCP server. */
   listLeases(): Promise<RouterLease[]>;
 
+  /**
+   * The DNS servers the router hands out over DHCP, when it exposes them.
+   *
+   * This is the single point of failure for the whole product: if the router
+   * stops pointing clients at the filter, every DHCP device silently becomes
+   * unfiltered while the dashboard still shows rules being enforced. It has
+   * happened in the field — a router reverted the setting by itself — so it is
+   * worth checking rather than assuming.
+   */
+  getDhcpDns?(): Promise<{ primary: string | null; secondary: string | null } | null>;
+
   /** Cumulative per-MAC byte counters (e.g. from nlbwmon). */
   getBandwidth(): Promise<RouterBandwidth[]>;
 

@@ -77,6 +77,19 @@ export class HuaweiLteService implements RouterProvider {
     return [];
   }
 
+  async getDhcpDns(): Promise<{ primary: string | null; secondary: string | null } | null> {
+    try {
+      const xml = await this.client.apiGet('/api/dhcp/settings');
+      return {
+        primary: tag(xml, 'PrimaryDns'),
+        secondary: tag(xml, 'SecondaryDns'),
+      };
+    } catch (err) {
+      this.logger.warn(`could not read DHCP DNS: ${(err as Error).message}`);
+      return null;
+    }
+  }
+
   async setBlockedMacs(macs: string[]): Promise<void> {
     try {
       const res = await this.client.setMacFilter(buildMultiMacFilter(macs));
