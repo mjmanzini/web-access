@@ -8,7 +8,7 @@ import {
 } from '../router-provider.interface';
 import { HuaweiClient } from './huawei.client';
 import { parseHostInfo, parseHostList, buildMultiMacFilter } from './parsers';
-import { tag } from './xml';
+import { errorCode, tag } from './xml';
 
 /**
  * Huawei HiLink (B525-class LTE CPE) implementation of RouterProvider. These
@@ -79,7 +79,20 @@ export class HuaweiLteService implements RouterProvider {
 
   async setBlockedMacs(macs: string[]): Promise<void> {
     try {
-      await this.client.setMacFilter(buildMultiMacFilter(macs));
+      const res = await this.client.setMacFilter(buildMultiMacFilter(macs));
+      // The HiLink API answers 200 with an <error> body rather than an HTTP
+      // error, so "no exception" does NOT mean the filter was applied. Without
+      // this check the log claimed devices were blocked while the router had
+      // silently rejected the request — the worst kind of failure for a
+      // parental control.
+      const code = errorCode(res);
+      if (code) {
+        this.logger.warn(
+          `Huawei MAC filter REJECTED (error ${code}) — ${macs.length} device(s) NOT blocked at the router. ` +
+            `DNS-layer blocking still applies. Firmware field names likely differ; validate the payload shape.`,
+        );
+        return;
+      }
       this.logger.log(`Huawei Wi-Fi MAC blacklist: ${macs.length} device(s) blocked`);
     } catch (err) {
       this.logger.warn(`setBlockedMacs failed: ${(err as Error).message}`);
