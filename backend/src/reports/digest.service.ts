@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { ReportsService } from './reports.service';
+import { postWebhook } from '../common/webhook.util';
 
 /**
  * Weekly family digest. Composes a per-profile screen-time + top-domains summary
@@ -43,17 +44,13 @@ export class DigestService {
       this.logger.debug('digest composed but no ALERT_WEBHOOK_URL set');
       return { sent: false, text };
     }
-    try {
-      await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: text, text }),
-      });
-      this.logger.log('weekly digest sent');
-      return { sent: true, text };
-    } catch (e) {
-      this.logger.warn(`digest webhook failed: ${(e as Error).message}`);
-      return { sent: false, text };
-    }
+    // postWebhook handles Discord's 2000-char cap (splitting on line
+    // boundaries) and its **bold** syntax; a long digest would otherwise be
+    // rejected outright rather than truncated.
+    const sent = await postWebhook(url, text, (m) =>
+      this.logger.warn(`digest webhook failed: ${m}`),
+    );
+    if (sent) this.logger.log('weekly digest sent');
+    return { sent, text };
   }
 }

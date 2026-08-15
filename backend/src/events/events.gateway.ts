@@ -1,5 +1,7 @@
 import { Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { postWebhook } from '../common/webhook.util';
+import { RateLimiter } from '../common/rate-limit.util';
 import {
   OnGatewayConnection,
   OnGatewayDisconnect,
@@ -76,14 +78,37 @@ export class EventsGateway
     this.server?.emit('activity', row);
   }
 
+  /**
+   * Alert types that are useful in the dashboard's live feed but must never
+   * reach a phone: one message per blocked DNS query means hundreds of pings a
+   * day, and the webhook provider rate-limits (Discord: ~5 posts / 2s), so the
+   * genuinely important alerts get dropped in the noise.
+   */
+  private static readonly FEED_ONLY_TYPES = new Set(['blocked_access']);
+
+  /** Same alert about the same subject at most once per 10 minutes. */
+  private static readonly cooldown = new RateLimiter(1, 10 * 60_000);
+
+  /** Backstop against any unforeseen storm: 15 messages per 10 minutes total. */
+  private static readonly budget = new RateLimiter(15, 10 * 60_000);
+
   private maybeWebhook(alert: Alert): void {
     const url = process.env.ALERT_WEBHOOK_URL;
     if (!url) return;
+    if (EventsGateway.FEED_ONLY_TYPES.has(alert.type)) return;
+
+    const subject = alert.deviceId ?? alert.profileId ?? alert.domain ?? '';
+    if (!EventsGateway.cooldown.allow(`${alert.type}:${subject}`)) return;
+    if (!EventsGateway.budget.allow('global')) {
+      this.logger.warn('webhook budget reached — suppressing alerts for now');
+      return;
+    }
+
+    const icon =
+      alert.severity === 'critical' ? '🚨' : alert.severity === 'warning' ? '⚠️' : 'ℹ️';
     // Fire-and-forget; never let webhook failure affect the request path.
-    fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: `[${alert.severity}] ${alert.message}` }),
-    }).catch((e) => this.logger.warn(`webhook failed: ${e.message}`));
+    void postWebhook(url, `${icon} **Home Guardian** — ${alert.message}`, (m) =>
+      this.logger.warn(`webhook failed: ${m}`),
+    );
   }
 }
