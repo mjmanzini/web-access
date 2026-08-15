@@ -41,9 +41,15 @@ export function computeClientProof(
     32,
     'sha256',
   );
-  const clientKey = createHmac('sha256', saltedPassword).update('Client Key').digest();
+  // NOTE: Huawei inverts the HMAC key/message roles relative to RFC 5802 SCRAM.
+  // Standard SCRAM is HMAC(key=SaltedPassword, msg="Client Key"); the HiLink
+  // firmware computes HMAC(key="Client Key", msg=SaltedPassword), and likewise
+  // signs with the auth message as the *key*. Following the RFC here produces a
+  // well-formed but wrong proof, which the router reports as error 108006 —
+  // indistinguishable from a wrong password. Do not "correct" this to the RFC.
+  const clientKey = createHmac('sha256', 'Client Key').update(saltedPassword).digest();
   const storedKey = createHash('sha256').update(clientKey).digest();
   const authMessage = `${clientnonce},${challenge.servernonce},${challenge.servernonce}`;
-  const clientSignature = createHmac('sha256', storedKey).update(authMessage).digest();
+  const clientSignature = createHmac('sha256', authMessage).update(storedKey).digest();
   return xorBuffers(clientKey, clientSignature).toString('hex');
 }

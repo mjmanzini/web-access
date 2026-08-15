@@ -7,7 +7,7 @@ import {
   RouterProvider,
 } from '../router-provider.interface';
 import { HuaweiClient } from './huawei.client';
-import { parseHostList, buildMultiMacFilter } from './parsers';
+import { parseHostInfo, parseHostList, buildMultiMacFilter } from './parsers';
 import { tag } from './xml';
 
 /**
@@ -50,7 +50,20 @@ export class HuaweiLteService implements RouterProvider {
     }
   }
 
+  /**
+   * The router is the source of truth for the device inventory. /api/lan/HostInfo
+   * carries names, MACs, address source and — unlike the Wi-Fi host list — the
+   * devices that are currently switched off. Falls back to the Wi-Fi list on
+   * firmwares that don't expose it.
+   */
   async listLeases(): Promise<RouterLease[]> {
+    try {
+      const leases = parseHostInfo(await this.client.hostInfo());
+      if (leases.length) return leases;
+      this.logger.debug('HostInfo returned nothing — falling back to host-list');
+    } catch (err) {
+      this.logger.warn(`HostInfo failed, trying host-list: ${(err as Error).message}`);
+    }
     try {
       return parseHostList(await this.client.hostList());
     } catch (err) {

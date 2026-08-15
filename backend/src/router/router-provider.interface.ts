@@ -16,6 +16,12 @@ export interface RouterLease {
   ip: string;
   mac: string;
   hostname: string | null;
+  /**
+   * Whether the router currently sees the device as connected. Undefined when
+   * the source only reports live clients; false means "known but not here",
+   * which is how devices that are switched off stay in the inventory.
+   */
+  online?: boolean;
 }
 
 /** Cumulative per-MAC byte counters as reported by the router. */
