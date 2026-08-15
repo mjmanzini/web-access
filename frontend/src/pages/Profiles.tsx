@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api/client';
-import type { Profile, ProfileReport } from '../api/types';
+import type { Profile, ProfileReport, Schedule } from '../api/types';
 
 const CATEGORIES = ['adult', 'social', 'gaming', 'video', 'gambling'];
 
@@ -126,12 +126,122 @@ export default function Profiles() {
               </button>
             </div>
 
+            <Bedtime profileId={p.id} />
+
             {report?.id === p.id && <ReportPanel data={report.data} />}
           </div>
         ))}
         {!profiles.length && <div className="muted">No profiles yet — add one above.</div>}
       </div>
     </>
+  );
+}
+
+const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+/**
+ * Bedtime / block windows for a profile. The backend already enforces these
+ * every minute (pausing the profile with reason "bedtime"); this is the UI for
+ * them. A window may cross midnight — 21:00→06:00 is the common case.
+ */
+function Bedtime({ profileId }: { profileId: string }) {
+  const [items, setItems] = useState<Schedule[]>([]);
+  const [open, setOpen] = useState(false);
+  const [start, setStart] = useState('21:00');
+  const [end, setEnd] = useState('06:00');
+  const [label, setLabel] = useState('Bedtime');
+  const [days, setDays] = useState<string[]>(['0', '1', '2', '3', '4', '5', '6']);
+
+  const load = () => api.schedules(profileId).then(setItems).catch(() => {});
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profileId]);
+
+  const add = async () => {
+    await api.createSchedule(profileId, { label, startTime: start, endTime: end, daysOfWeek: days, enabled: true });
+    setOpen(false);
+    setLabel('Bedtime');
+    load();
+  };
+  const toggle = async (s: Schedule) => {
+    await api.updateSchedule(s.id, { enabled: !s.enabled });
+    load();
+  };
+  const remove = async (s: Schedule) => {
+    if (!confirm(`Remove "${s.label}" (${s.startTime}–${s.endTime})?`)) return;
+    await api.deleteSchedule(s.id);
+    load();
+  };
+  const toggleDay = (d: string) =>
+    setDays((prev) => (prev.includes(d) ? prev.filter((x) => x !== d) : [...prev, d].sort()));
+
+  const daySummary = (s: Schedule) =>
+    !s.daysOfWeek?.length || s.daysOfWeek.length === 7
+      ? 'every day'
+      : s.daysOfWeek.map((d) => DAY_LABELS[Number(d)]).join(' ');
+
+  return (
+    <div style={{ marginTop: 12, borderTop: '1px solid var(--panel-2)', paddingTop: 10 }}>
+      <div className="row" style={{ justifyContent: 'space-between', marginBottom: 8 }}>
+        <span className="muted" style={{ fontSize: 12 }}>
+          Bedtime &amp; block windows
+        </span>
+        <button className="ghost" style={{ padding: '4px 10px', fontSize: 12 }} onClick={() => setOpen((v) => !v)}>
+          {open ? 'Cancel' : '+ Add'}
+        </button>
+      </div>
+
+      {items.map((s) => (
+        <div key={s.id} className="row" style={{ justifyContent: 'space-between', marginBottom: 6 }}>
+          <div>
+            <strong style={{ fontSize: 13 }}>{s.startTime}–{s.endTime}</strong>{' '}
+            <span className="muted" style={{ fontSize: 12 }}>{s.label} · {daySummary(s)}</span>
+          </div>
+          <div className="row">
+            <button
+              className={s.enabled ? 'ghost' : 'ghost'}
+              style={{ padding: '2px 8px', fontSize: 11 }}
+              onClick={() => toggle(s)}
+            >
+              {s.enabled ? 'on' : 'off'}
+            </button>
+            <button className="ghost" style={{ padding: '2px 8px', fontSize: 11 }} onClick={() => remove(s)}>
+              ✕
+            </button>
+          </div>
+        </div>
+      ))}
+      {!items.length && !open && (
+        <div className="muted" style={{ fontSize: 12 }}>
+          No bedtime set — internet stays on around the clock.
+        </div>
+      )}
+
+      {open && (
+        <div className="grid" style={{ gap: 8, marginTop: 8 }}>
+          <div className="row">
+            <input value={label} onChange={(e) => setLabel(e.target.value)} style={{ width: 120 }} placeholder="Label" />
+            <input type="time" value={start} onChange={(e) => setStart(e.target.value)} style={{ width: 110 }} />
+            <span className="muted">to</span>
+            <input type="time" value={end} onChange={(e) => setEnd(e.target.value)} style={{ width: 110 }} />
+          </div>
+          <div className="row">
+            {DAY_LABELS.map((d, i) => (
+              <button
+                key={d}
+                className={days.includes(String(i)) ? '' : 'ghost'}
+                style={{ padding: '3px 8px', fontSize: 11 }}
+                onClick={() => toggleDay(String(i))}
+              >
+                {d}
+              </button>
+            ))}
+          </div>
+          <button onClick={add} disabled={!days.length}>Save window</button>
+        </div>
+      )}
+    </div>
   );
 }
 

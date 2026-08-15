@@ -7,6 +7,7 @@ import Rules from './pages/Rules';
 import Activity from './pages/Activity';
 import Requests from './pages/Requests';
 import Login from './pages/Login';
+import Account from './pages/Account';
 import AlertsFeed from './components/AlertsFeed';
 import { auth } from './api/auth';
 
@@ -17,6 +18,7 @@ const NAV = [
   { to: '/rules', label: 'Rules' },
   { to: '/requests', label: 'Requests' },
   { to: '/activity', label: 'Activity' },
+  { to: '/account', label: 'Account' },
 ];
 
 export default function App() {
@@ -56,6 +58,7 @@ export default function App() {
           <Route path="/rules" element={<Rules />} />
           <Route path="/requests" element={<Requests />} />
           <Route path="/activity" element={<Activity />} />
+          <Route path="/account" element={<Account />} />
         </Routes>
       </main>
 

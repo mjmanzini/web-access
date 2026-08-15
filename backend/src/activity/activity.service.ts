@@ -107,8 +107,52 @@ export class ActivityService {
 
   // ---- read APIs for the dashboard ----
 
-  recent(limit = 100): Promise<ActivityLog[]> {
-    return this.logs.find({ order: { timestamp: 'DESC' }, take: limit });
+  /**
+   * Recent activity, newest first, with each row's device name attached so the
+   * dashboard can show "Jastice's phone" instead of a bare 192.168.8.60. Rows
+   * are denormalized by design, so the name is resolved at read time rather
+   * than stored — a rename is reflected across all history immediately.
+   */
+  async recent(
+    limit = 100,
+    deviceId?: string,
+  ): Promise<Array<ActivityLog & { deviceName: string | null }>> {
+    // Rows keep the deviceId they were ingested with, which goes stale when a
+    // device row is replaced (a re-scan that supersedes a MAC-less entry, say).
+    // Match on the stored id OR the client IP so a device's history stays whole
+    // instead of splitting into "before" and "after" halves.
+    const target = deviceId
+      ? await this.devices.findOne({ where: { id: deviceId } })
+      : null;
+
+    // Filtering server-side matters: a chatty phone can fill the whole window,
+    // so a client-side filter would show "no activity" for quieter devices.
+    const rows = await this.logs.find({
+      where: deviceId
+        ? target?.ipAddress
+          ? [{ deviceId }, { clientIp: target.ipAddress }]
+          : { deviceId }
+        : {},
+      order: { timestamp: 'DESC' },
+      take: limit,
+    });
+
+    // Resolve names by id first, then by current IP holder — the latter rescues
+    // rows whose device row no longer exists.
+    const devices = await this.devices.find();
+    const byId = new Map(devices.map((d) => [d.id, d]));
+    const byIp = new Map(devices.filter((d) => d.ipAddress).map((d) => [d.ipAddress, d]));
+
+    return rows.map((r) => {
+      const device = (r.deviceId ? byId.get(r.deviceId) : null) ?? byIp.get(r.clientIp);
+      return {
+        ...r,
+        // Report the *current* device id so the dashboard groups history under
+        // one entry per device rather than one per superseded row.
+        deviceId: device?.id ?? r.deviceId,
+        deviceName: device?.name ?? null,
+      };
+    });
   }
 
   /** Top domains for a device/profile over the last `hours`. */

@@ -15,6 +15,19 @@ export interface Profile {
   devices?: Device[];
 }
 
+/** A recurring block window for a profile — bedtime, homework hours, etc. */
+export interface Schedule {
+  id: string;
+  label: string;
+  /** 0=Sun .. 6=Sat. Empty means every day. */
+  daysOfWeek: string[];
+  /** 24h "HH:mm" local time; a window may cross midnight (start > end). */
+  startTime: string;
+  endTime: string;
+  enabled: boolean;
+  profileId: string;
+}
+
 export interface Device {
   id: string;
   name: string;
@@ -57,6 +70,8 @@ export interface ActivityLog {
   domain: string;
   action: 'allowed' | 'blocked' | 'rewritten';
   category: string | null;
+  /** Friendly device name resolved at read time; null for unknown clients. */
+  deviceName: string | null;
 }
 
 export interface BandwidthRow {

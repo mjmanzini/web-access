@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { api } from '../api/client';
 import type { ActivityLog, Device, Profile, RouterStatus, SystemHealth } from '../api/types';
 
@@ -66,6 +67,45 @@ export default function Dashboard() {
           sub={randomized ? 'possible evasion' : 'none'}
           danger={randomized > 0}
         />
+      </div>
+
+      {/* Bedtime/quota state is invisible unless surfaced — a parent should see
+          at a glance why a child has no internet right now. */}
+      <div className="card" style={{ marginTop: 16 }}>
+        <div className="row" style={{ justifyContent: 'space-between', marginBottom: 8 }}>
+          <h2 style={{ margin: 0 }}>Bedtime &amp; limits</h2>
+          <Link className="badge muted" to="/profiles">Manage in Profiles →</Link>
+        </div>
+        {profiles.length ? (
+          <div className="grid" style={{ gap: 6 }}>
+            {profiles.map((p) => (
+              <div key={p.id} className="row" style={{ justifyContent: 'space-between' }}>
+                <span>{p.name}</span>
+                <span className="row">
+                  {p.dailyTimeLimitMinutes != null && (
+                    <span className="badge muted">{p.dailyTimeLimitMinutes}m/day</span>
+                  )}
+                  {p.internetPaused ? (
+                    <span className="badge danger">
+                      {p.pausedReason === 'bedtime'
+                        ? 'bedtime — internet off'
+                        : p.pausedReason === 'quota_exceeded'
+                          ? 'daily limit reached'
+                          : 'paused'}
+                    </span>
+                  ) : (
+                    <span className="badge ok">internet on</span>
+                  )}
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="muted">
+            No profiles yet. Create one in Profiles, assign devices to it, then set a
+            bedtime window — internet switches off automatically inside it.
+          </div>
+        )}
       </div>
 
       <div className="card" style={{ marginTop: 16 }}>
