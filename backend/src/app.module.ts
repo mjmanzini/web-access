@@ -14,6 +14,8 @@ import { RulesModule } from './rules/rules.module';
 import { ActivityModule } from './activity/activity.module';
 import { BandwidthModule } from './bandwidth/bandwidth.module';
 import { RequestsModule } from './requests/requests.module';
+import { PortalModule } from './portal/portal.module';
+import { PushModule } from './push/push.module';
 import { ReportsModule } from './reports/reports.module';
 import { HealthModule } from './health/health.module';
 import { SchedulesModule } from './schedules/schedules.module';
@@ -38,6 +40,8 @@ import { SchedulesModule } from './schedules/schedules.module';
     ActivityModule,
     BandwidthModule,
     RequestsModule,
+    PortalModule,
+    PushModule,
     ReportsModule,
     HealthModule,
     SchedulesModule,
