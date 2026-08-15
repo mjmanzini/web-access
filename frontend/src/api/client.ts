@@ -8,6 +8,7 @@ import type {
   ProfileReport,
   RouterStatus,
   Rule,
+  Schedule,
   SystemHealth,
 } from './types';
 import { auth } from './auth';
@@ -16,7 +17,14 @@ import { auth } from './auth';
 // /api to the NestJS backend. Override with VITE_API_BASE if hosting split.
 const BASE = (import.meta.env.VITE_API_BASE ?? '') + '/api';
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function request<T>(
+  path: string,
+  init?: RequestInit,
+  // Some endpoints answer 401 to mean "that input was wrong", not "your session
+  // expired" — change-password rejecting the current password, for example.
+  // Those pass keepSessionOn401 so a typo doesn't sign the user out.
+  opts?: { keepSessionOn401?: boolean },
+): Promise<T> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(init?.headers as Record<string, string> | undefined),
@@ -24,11 +32,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (auth.token) headers.Authorization = `Bearer ${auth.token}`;
 
   const res = await fetch(BASE + path, { ...init, headers });
-  if (res.status === 401) {
+  if (res.status === 401 && !opts?.keepSessionOn401) {
     auth.clear(); // token missing/expired → bounce to login
     throw new Error('Unauthorized');
   }
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    // Nest's validation pipe returns `message` as an array of failures.
+    const detail = Array.isArray(body?.message) ? body.message.join('. ') : body?.message;
+    throw new Error(detail ?? `${res.status} ${res.statusText}`);
+  }
   return res.status === 204 ? (undefined as T) : res.json();
 }
 
@@ -40,6 +53,12 @@ export const api = {
       body: JSON.stringify({ username, password }),
     }),
   me: () => request<{ id: string; username: string }>('/auth/me'),
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request<{ ok: true }>(
+      '/auth/change-password',
+      { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) },
+      { keepSessionOn401: true },
+    ),
 
   // profiles
   profiles: () => request<Profile[]>('/profiles'),
@@ -62,6 +81,26 @@ export const api = {
     }),
   report: (id: string) => request<ProfileReport>(`/reports/profile/${id}`),
 
+  // web push
+  pushConfig: () => request<{ enabled: boolean; publicKey: string | null; devices: number }>('/push/config'),
+  pushSubscribe: (body: { endpoint: string; keys: { p256dh: string; auth: string } }) =>
+    request<{ ok: true }>('/push/subscribe', { method: 'POST', body: JSON.stringify(body) }),
+  pushUnsubscribe: (endpoint: string) =>
+    request<{ ok: true }>('/push/subscribe', { method: 'DELETE', body: JSON.stringify({ endpoint }) }),
+  pushTest: () => request<{ delivered: number }>('/push/test', { method: 'POST' }),
+
+  // schedules (bedtime / homework windows)
+  schedules: (profileId: string) =>
+    request<Schedule[]>(`/profiles/${profileId}/schedules`),
+  createSchedule: (profileId: string, body: Partial<Schedule>) =>
+    request<Schedule>(`/profiles/${profileId}/schedules`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  updateSchedule: (id: string, body: Partial<Schedule>) =>
+    request<Schedule>(`/schedules/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  deleteSchedule: (id: string) => request<void>(`/schedules/${id}`, { method: 'DELETE' }),
+
   // access requests
   pendingRequests: () => request<AccessRequest[]>('/requests/pending'),
   approveRequest: (id: string) => request<AccessRequest>(`/requests/${id}/approve`, { method: 'POST' }),
@@ -73,6 +112,7 @@ export const api = {
   syncDevices: () => request<{ discovered: number; created: number }>('/devices/sync', { method: 'POST' }),
   updateDevice: (id: string, body: Partial<Device>) =>
     request<Device>(`/devices/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  deleteDevice: (id: string) => request<void>(`/devices/${id}`, { method: 'DELETE' }),
 
   // rules
   rules: () => request<Rule[]>('/rules'),
@@ -81,7 +121,10 @@ export const api = {
   deleteRule: (id: string) => request<void>(`/rules/${id}`, { method: 'DELETE' }),
 
   // activity
-  activity: (limit = 100) => request<ActivityLog[]>(`/activity?limit=${limit}`),
+  activity: (limit = 100, deviceId?: string) =>
+    request<ActivityLog[]>(
+      `/activity?limit=${limit}${deviceId ? `&deviceId=${encodeURIComponent(deviceId)}` : ''}`,
+    ),
   networkStatus: () => request<{ running: boolean; version: string | null }>('/network/status'),
   systemHealth: () => request<SystemHealth>('/system/health'),
 

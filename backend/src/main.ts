@@ -6,7 +6,8 @@ import { AppModule } from './app.module';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  app.setGlobalPrefix('api');
+  // The child-facing request page keeps a short, memorable URL.
+  app.setGlobalPrefix('api', { exclude: ['request', 'status', 'api/status', '/'] });
   app.enableCors({
     origin: (process.env.CORS_ORIGIN ?? '*').split(','),
     credentials: true,

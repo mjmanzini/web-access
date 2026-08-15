@@ -1,7 +1,23 @@
 import { Fragment, useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import type { BandwidthRow, Device, DnsSetup, Profile } from '../api/types';
 import { formatBytes, formatRate } from '../api/format';
+
+/** A name still derived from discovery rather than chosen by the parent. */
+const isAutoName = (d: Device) =>
+  d.name === d.ipAddress || /^\d+\.\d+\.\d+\.\d+$/.test(d.name);
+
+/** "3m ago" / "2h ago" / "4d ago" — compact last-seen for offline devices. */
+function lastSeen(at: string | null): string {
+  if (!at) return 'never seen';
+  const mins = Math.floor((Date.now() - new Date(at).getTime()) / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
 
 export default function Devices() {
   const [devices, setDevices] = useState<Device[]>([]);
@@ -9,6 +25,13 @@ export default function Devices() {
   const [bandwidth, setBandwidth] = useState<Record<string, BandwidthRow>>({});
   const [busy, setBusy] = useState(false);
   const [setup, setSetup] = useState<{ id: string; data: DnsSetup } | null>(null);
+  // Inline rename: which row is being edited, and its pending text.
+  const [editing, setEditing] = useState<string | null>(null);
+  const [draft, setDraft] = useState('');
+  const [showOffline, setShowOffline] = useState(false);
+  const [pending, setPending] = useState<Set<string>>(new Set());
+  const [error, setError] = useState('');
+  const navigate = useNavigate();
 
   const load = () => {
     api.devices().then(setDevices).catch(() => {});
@@ -39,8 +62,50 @@ export default function Devices() {
     await api.updateDevice(id, { profileId: profileId || null });
     load();
   };
+  /**
+   * Pause/resume with visible state. Without this the button looked inert on a
+   * phone: the request is fired, nothing changes until the next poll, and a
+   * failure (expired session, API unreachable) is swallowed entirely — so a tap
+   * that never reached the backend is indistinguishable from one that worked.
+   */
   const toggleBlock = async (d: Device) => {
-    await api.updateDevice(d.id, { blocked: !d.blocked });
+    setPending((prev) => new Set(prev).add(d.id));
+    setError('');
+    try {
+      const updated = await api.updateDevice(d.id, { blocked: !d.blocked });
+      // Reflect the server's answer immediately rather than waiting for a poll.
+      setDevices((prev) => prev.map((x) => (x.id === d.id ? { ...x, blocked: updated.blocked } : x)));
+      load();
+    } catch (e) {
+      setError(
+        `Could not ${d.blocked ? 'resume' : 'pause'} ${d.name}: ${
+          e instanceof Error ? e.message : 'request failed'
+        }`,
+      );
+    } finally {
+      setPending((prev) => {
+        const next = new Set(prev);
+        next.delete(d.id);
+        return next;
+      });
+    }
+  };
+  const startRename = (d: Device) => {
+    setEditing(d.id);
+    setDraft(d.name);
+  };
+  const saveRename = async (id: string) => {
+    const name = draft.trim();
+    setEditing(null);
+    // A device's name is set by the parent; a scan never overwrites it.
+    if (name && name !== devices.find((d) => d.id === id)?.name) {
+      await api.updateDevice(id, { name });
+      load();
+    }
+  };
+  const forget = async (d: Device) => {
+    if (!confirm(`Remove "${d.name}" from the device list?\n\nIt will reappear if it is still on the network.`)) return;
+    await api.deleteDevice(d.id);
     load();
   };
   const showSetup = async (id: string) => {
@@ -49,28 +114,108 @@ export default function Devices() {
     setSetup({ id, data });
   };
 
+  /** Why this device's profile has it offline, if it does. */
+  const profilePause = (d: Device): string | null => {
+    const p = profiles.find((x) => x.id === d.profileId);
+    if (!p?.internetPaused) return null;
+    return p.pausedReason === 'bedtime'
+      ? 'bedtime'
+      : p.pausedReason === 'quota_exceeded'
+        ? 'daily limit'
+        : 'profile paused';
+  };
+
+  /** Lift a profile-level pause — the action that actually restores internet. */
+  const resumeProfile = async (d: Device) => {
+    const p = profiles.find((x) => x.id === d.profileId);
+    if (!p) return;
+    setPending((prev) => new Set(prev).add(d.id));
+    setError('');
+    try {
+      await api.pauseProfile(p.id, false);
+      load();
+    } catch (e) {
+      setError(`Could not resume ${p.name}: ${e instanceof Error ? e.message : 'request failed'}`);
+    } finally {
+      setPending((prev) => {
+        const next = new Set(prev);
+        next.delete(d.id);
+        return next;
+      });
+    }
+  };
+
+  // Online first, then devices the parent has organised (named / assigned to a
+  // profile), then the rest — so the list reads top-down by relevance.
+  const rank = (d: Device) =>
+    (d.isOnline ? 0 : 100) + (d.profileId ? 0 : 10) + (isAutoName(d) ? 5 : 0);
+  const sorted = [...devices].sort(
+    (a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name),
+  );
+  const online = sorted.filter((d) => d.isOnline);
+  const offline = sorted.filter((d) => !d.isOnline);
+  const shown = showOffline ? sorted : online;
+
   return (
     <>
       <div className="header">
         <h1>Devices</h1>
-        <button onClick={sync} disabled={busy}>{busy ? 'Scanning…' : 'Scan network'}</button>
+        <div className="row">
+          <span className="badge ok">{online.length} online</span>
+          {offline.length > 0 && (
+            <button className="ghost" onClick={() => setShowOffline((v) => !v)}>
+              {showOffline ? 'Hide' : 'Show'} {offline.length} offline
+            </button>
+          )}
+          <button onClick={sync} disabled={busy}>{busy ? 'Scanning…' : 'Scan network'}</button>
+        </div>
       </div>
+
+      {error && <div className="badge danger" style={{ marginBottom: 12, display: "block" }}>{error}</div>}
 
       <div className="card">
         <table>
           <thead>
             <tr>
-              <th>Device</th><th>IP</th><th>Identity</th><th>Today ↓/↑</th><th>Profile</th><th>Status</th><th></th>
+              <th>Device</th><th>Identity</th><th>Today ↓/↑</th><th>Profile</th><th>Status</th><th></th>
             </tr>
           </thead>
           <tbody>
-            {devices.map((d) => (
+            {shown.map((d) => (
               <Fragment key={d.id}>
-                <tr>
+                <tr style={d.isOnline ? undefined : { opacity: 0.55 }}>
                   <td>
-                    <span className={`dot ${d.isOnline ? 'on' : 'off'}`} /> {d.name}
+                    {editing === d.id ? (
+                      <div className="row">
+                        <input
+                          autoFocus
+                          value={draft}
+                          onChange={(e) => setDraft(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') saveRename(d.id);
+                            if (e.key === 'Escape') setEditing(null);
+                          }}
+                          onBlur={() => saveRename(d.id)}
+                          style={{ width: 170 }}
+                          placeholder="e.g. Jastice's phone"
+                        />
+                      </div>
+                    ) : (
+                      <>
+                        <span
+                          onClick={() => startRename(d)}
+                          title="Click to rename"
+                          style={{ cursor: 'pointer' }}
+                        >
+                          <span className={`dot ${d.isOnline ? 'on' : 'off'}`} /> {d.name}
+                        </span>
+                        <div className="muted" style={{ fontSize: 11 }}>
+                          {d.ipAddress}
+                          {d.vendor && ` · ${d.vendor}`}
+                        </div>
+                      </>
+                    )}
                   </td>
-                  <td className="muted">{d.ipAddress}</td>
                   <td>
                     {/* Stable identity = ClientID present and MAC not randomized. */}
                     {d.macRandomized && !d.clientId ? (
@@ -98,21 +243,79 @@ export default function Devices() {
                       ))}
                     </select>
                   </td>
-                  <td>
-                    {d.blocked
-                      ? <span className="badge danger">blocked</span>
-                      : <span className="badge ok">allowed</span>}
+                  <td style={{ whiteSpace: 'nowrap' }}>
+                    {d.isOnline
+                      ? <span className="badge ok">online</span>
+                      : <span className="badge muted" title={d.lastSeenAt ?? ''}>offline</span>}
+                    {/* A device can be cut off by its PROFILE rather than by
+                        itself. Without saying so, the device-level Resume
+                        button looks broken: it toggles a flag that isn't the
+                        thing blocking. */}
+                    {profilePause(d) && (
+                      <div style={{ marginTop: 4 }}>
+                        <span className="badge danger" title="Paused by this device's profile">
+                          {profilePause(d)}
+                        </span>
+                      </div>
+                    )}
+                    {/* The state that makes everything else a lie: online, rules
+                        applied, and resolving somewhere we can't see. */}
+                    {d.isOnline && d.usingFilter === false && (
+                      <div style={{ marginTop: 4 }}>
+                        <span
+                          className="badge warn"
+                          title={
+                            'This device is connected but has not asked Home Guardian to resolve ' +
+                            'anything recently, so filtering and bedtime are NOT reaching it. ' +
+                            'Usual causes: it still holds an old DHCP lease (toggle its Wi-Fi), ' +
+                            'or Private DNS / DoT is switched on in its settings.'
+                          }
+                        >
+                          ⚠ not filtered
+                        </span>
+                        <div className="muted" style={{ fontSize: 11 }}>
+                          {d.lastFilteredAt
+                            ? `last seen by filter ${lastSeen(d.lastFilteredAt)}`
+                            : 'never seen by filter'}
+                        </div>
+                      </div>
+                    )}
+                    {!d.isOnline && (
+                      <div className="muted" style={{ fontSize: 11 }}>{lastSeen(d.lastSeenAt)}</div>
+                    )}
+                    {d.blocked && <div><span className="badge danger">blocked</span></div>}
                   </td>
                   <td className="row" style={{ justifyContent: 'flex-end' }}>
+                    <button className="ghost" onClick={() => navigate(`/activity?device=${d.id}`)}>
+                      Activity
+                    </button>
+                    <button className="ghost" onClick={() => startRename(d)}>Rename</button>
                     <button className="ghost" onClick={() => showSetup(d.id)}>DNS setup</button>
-                    <button className={d.blocked ? 'ghost' : 'danger'} onClick={() => toggleBlock(d)}>
-                      {d.blocked ? 'Unblock' : 'Block'}
+                    <button className="ghost" onClick={() => forget(d)} title="Remove this entry">Forget</button>
+                    {/* When the profile is what's blocking, offer the action
+                        that actually works. */}
+                    {profilePause(d) && (
+                      <button disabled={pending.has(d.id)} onClick={() => resumeProfile(d)}>
+                        {pending.has(d.id) ? '…' : `Resume ${profilePause(d)}`}
+                      </button>
+                    )}
+                    <button
+                      className={d.blocked ? '' : 'danger'}
+                      disabled={pending.has(d.id)}
+                      onClick={() => toggleBlock(d)}
+                      title={
+                        d.blocked
+                          ? 'Give this device internet again'
+                          : 'Cut this device off now — dinner, homework, bedtime'
+                      }
+                    >
+                      {pending.has(d.id) ? '…' : d.blocked ? 'Resume internet' : 'Pause internet'}
                     </button>
                   </td>
                 </tr>
                 {setup?.id === d.id && (
                   <tr>
-                    <td colSpan={7} style={{ background: 'var(--panel-2)' }}>
+                    <td colSpan={6} style={{ background: 'var(--panel-2)' }}>
                       <SetupPanel data={setup.data} />
                     </td>
                   </tr>
@@ -120,7 +323,7 @@ export default function Devices() {
               </Fragment>
             ))}
             {!devices.length && (
-              <tr><td colSpan={7} className="muted">No devices yet — run a network scan.</td></tr>
+              <tr><td colSpan={6} className="muted">No devices yet — run a network scan.</td></tr>
             )}
           </tbody>
         </table>

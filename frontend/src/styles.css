@@ -20,7 +20,10 @@ body {
 }
 a { color: inherit; text-decoration: none; }
 
-.layout { display: grid; grid-template-columns: 220px 1fr; min-height: 100vh; }
+/* minmax(0,1fr) — a plain 1fr grid item refuses to shrink below its content, so
+   a wide table would stretch the whole page instead of scrolling in its card. */
+.layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: 100vh; }
+.main { min-width: 0; }
 .sidebar {
   background: var(--panel);
   border-right: 1px solid var(--border);
@@ -70,10 +73,36 @@ input, select {
   border-radius: 8px; padding: 8px 10px;
 }
 
-.alerts { position: fixed; right: 18px; bottom: 18px; width: 340px; display: grid; gap: 8px; z-index: 50; }
+/* ---- Live alert tray ---- */
+.alerts {
+  position: fixed; right: 18px; bottom: 18px; width: 340px; max-width: calc(100vw - 24px);
+  display: grid; gap: 8px; z-index: 50;
+}
+.alerts-bar { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+.alerts-toggle {
+  display: flex; align-items: center; gap: 8px; flex: 1;
+  background: var(--panel); color: var(--muted); border: 1px solid var(--border);
+  font-size: 12px; font-weight: 600; padding: 8px 12px;
+}
+.alerts-chevron { margin-left: auto; font-size: 10px; }
+.alerts-toggle.warning { border-color: var(--warn); color: var(--warn); }
+.alerts-toggle.critical { border-color: var(--danger); color: var(--danger); }
+.alerts-clear { background: var(--panel-2); color: var(--muted); border: 1px solid var(--border); font-size: 12px; }
+/* Cap the tray so a burst of alerts can never bury the page beneath it. */
+.alerts-list { display: grid; gap: 8px; max-height: 45vh; overflow-y: auto; }
+
 .alert {
   background: var(--panel); border: 1px solid var(--border); border-left-width: 4px;
   border-radius: 8px; padding: 10px 12px; font-size: 13px;
+  display: flex; gap: 10px; align-items: flex-start;
+}
+.alert-body { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.alert-dismiss {
+  background: transparent; border: 0; color: var(--muted);
+  /* Generous hit area: this is the control reached for most on a phone, and a
+     2px-padded glyph is essentially untappable with a thumb. */
+  padding: 8px 12px; margin: -6px -8px -6px 0;
+  font-size: 16px; line-height: 1; flex-shrink: 0; min-height: 36px;
 }
 .alert.info { border-left-color: var(--accent); }
 .alert.warning { border-left-color: var(--warn); }
@@ -81,3 +110,59 @@ input, select {
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 .dot.on { background: var(--ok); } .dot.off { background: var(--muted); }
+
+/* ---------------------------------------------------------------------------
+   Phone layout. This dashboard is used mostly from a phone, where the desktop
+   assumptions break badly: a fixed 220px sidebar consumes most of a 375px
+   screen, and wide tables overflow the viewport with no way to reach the
+   right-hand columns.
+   --------------------------------------------------------------------------- */
+@media (max-width: 768px) {
+  /* Sidebar becomes a scrollable top bar. */
+  .layout { grid-template-columns: minmax(0, 1fr); }
+  .sidebar {
+    border-right: 0; border-bottom: 1px solid var(--border);
+    padding: 12px 12px 8px;
+    position: sticky; top: 0; z-index: 40;
+  }
+  .brand { margin-bottom: 12px; }
+  .nav { display: flex; gap: 6px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .nav a { white-space: nowrap; margin-bottom: 0; padding: 8px 12px; }
+  /* The sign-out button is inline-block on desktop; keep it from stretching. */
+  .sidebar > button { width: auto !important; margin-top: 10px !important; }
+
+  .main { padding: 16px 12px 12px; }
+  .header { flex-wrap: wrap; gap: 10px; }
+  .header .row { width: 100%; }
+
+  /* Wide tables scroll inside their own card rather than the page. */
+  .card { overflow-x: auto; min-width: 0; }
+  table { min-width: 520px; }
+  th, td { padding: 8px 10px; }
+
+  /* Comfortable touch targets. The dismiss ✕ keeps its own 36px minimum —
+     shrinking it here is what made alerts impossible to close by thumb. */
+  button { min-height: 38px; }
+  .alerts-chevron { min-height: 0; }
+
+  /* The collapsed tray floats over the page, so leave room for it: without
+     this the last table row sits underneath and can't be reached or tapped. */
+  .main { padding-bottom: 76px; }
+  input, select { min-height: 38px; font-size: 16px; } /* 16px stops iOS zooming on focus */
+
+  /* Alert tray spans the width and sits above the home indicator. */
+  .alerts {
+    left: 10px; right: 10px; bottom: 10px; width: auto; max-width: none;
+    padding-bottom: env(safe-area-inset-bottom, 0);
+  }
+  .alerts-list { max-height: 40vh; }
+
+  /* Stat tiles two-up instead of one giant column. */
+  .cards { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+  .stat { font-size: 22px; }
+}
+
+@media (max-width: 380px) {
+  .cards { grid-template-columns: 1fr 1fr; }
+  .stat { font-size: 20px; }
+}

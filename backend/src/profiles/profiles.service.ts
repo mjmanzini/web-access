@@ -15,6 +15,8 @@ import {
   RouterProvider,
 } from '../router/router-provider.interface';
 import { EventsGateway } from '../events/events.gateway';
+import { SchedulesService } from '../schedules/schedules.service';
+import { effectiveState } from '../common/effective-state';
 import {
   CreateProfileDto,
   PauseProfileDto,
@@ -60,13 +62,35 @@ export class ProfilesService {
       blockedCategories: dto.blockedCategories ?? [],
     });
     const saved = await this.profiles.save(profile);
-    await this.syncProfile(saved.id);
+    // The profile row is already committed by this point, so letting an
+    // appliance error escape would answer 500 to a request that DID create the
+    // profile: the parent sees a failure, taps Add again, and ends up with
+    // duplicates. Report the profile, and raise the enforcement failure as an
+    // alert rather than hiding it — the next enforce tick reconciles.
+    try {
+      await this.syncProfile(saved.id);
+    } catch (err) {
+      const detail = (err as Error).message;
+      this.logger.warn(`profile "${saved.name}" created, policy push failed: ${detail}`);
+      this.events.emitAlert({
+        type: 'system_down',
+        severity: 'warning',
+        message:
+          `Profile "${saved.name}" was created, but its filtering rules could not be ` +
+          `applied yet (${detail}). It will retry automatically.`,
+        profileId: saved.id,
+        at: new Date().toISOString(),
+      });
+    }
     return saved;
   }
 
   async update(id: string, dto: UpdateProfileDto): Promise<Profile> {
     await this.profiles.update(id, dto);
     await this.syncProfile(id);
+    // A switch (or a changed daily limit) changes the effective state, so
+    // recompute immediately rather than leaving it until the next tick.
+    await this.reevaluate(id);
     return this.findOne(id);
   }
 
@@ -77,22 +101,93 @@ export class ProfilesService {
   }
 
   /** Instant pause/resume for a whole profile (manual, bedtime, or quota). */
+  /**
+   * Flip the parent's manual kill switch. This is all a pause/resume control
+   * does now: it sets an *input*, and the evaluator recomputes the effective
+   * state from it. Writing internetPaused directly is what previously left the
+   * scheduler and the parent fighting over the same field.
+   */
+  async setSwitch(id: string, internetSwitch: 'auto' | 'off'): Promise<Profile> {
+    await this.profiles.update(id, { internetSwitch });
+    await this.reevaluate(id);
+    return this.findOne(id);
+  }
+
+  /** Turn bedtime windows on or off for this profile, independently. */
+  async setBedtimeEnabled(id: string, bedtimeEnabled: boolean): Promise<Profile> {
+    await this.profiles.update(id, { bedtimeEnabled });
+    await this.reevaluate(id);
+    return this.findOne(id);
+  }
+
+  /**
+   * Recompute now instead of waiting up to a minute for the next tick, so a
+   * switch takes effect while the parent is still looking at it.
+   */
+  async reevaluate(id: string): Promise<void> {
+    const profile = await this.profiles.findOne({
+      where: { id },
+      relations: { schedules: true },
+    });
+    if (!profile) return;
+
+    const now = new Date();
+    const active = (profile.schedules ?? []).find((s) => SchedulesService.isActive(s, now));
+    const date = now.toISOString().slice(0, 10);
+    const usage = await this.dailyUsage.findOne({ where: { profileId: id, date } });
+
+    const state = effectiveState({
+      internetSwitch: profile.internetSwitch ?? 'auto',
+      bedtimeEnabled: profile.bedtimeEnabled ?? true,
+      inBedtimeWindow: !!active,
+      bedtimeEndsAt: active?.endTime ?? null,
+      dailyLimitMinutes: profile.dailyTimeLimitMinutes,
+      usedMinutes: usage?.usedMinutes ?? 0,
+      bonusMinutes: usage?.bonusMinutes ?? 0,
+    });
+
+    await this.applyEffectiveState(
+      id,
+      state.blocked,
+      state.cause === 'quota' ? 'quota_exceeded' : state.cause ?? undefined,
+    );
+  }
+
+  /** Persist the computed state and push enforcement. */
+  async applyEffectiveState(id: string, blocked: boolean, reason?: string): Promise<Profile> {
+    return this.setPaused(id, { paused: blocked, reason });
+  }
+
   async setPaused(id: string, dto: PauseProfileDto): Promise<Profile> {
     await this.profiles.update(id, {
       internetPaused: dto.paused,
       pausedReason: dto.paused ? (dto.reason ?? 'manual') : null,
     });
     await this.syncBlockedIdentifiers();
+
+    const profile = await this.findOne(id);
     if (dto.paused) {
+      // Alerts are read by a person on a phone: name the child and the devices
+      // affected. A UUID here tells the reader nothing about whose internet
+      // just stopped.
+      const devices = (profile.devices ?? []).map((d) => d.name).join(', ');
+      const on = devices ? ` (${devices})` : '';
+      const message =
+        dto.reason === 'quota_exceeded'
+          ? `Daily limit reached — ${profile.name} paused${on}.`
+          : dto.reason === 'bedtime'
+            ? `Bedtime started — ${profile.name} paused${on}.`
+            : `${profile.name} switched off${on}.`;
+
       this.events.emitAlert({
         type: dto.reason === 'quota_exceeded' ? 'quota_exceeded' : 'bedtime_pause',
         severity: 'info',
-        message: `Internet paused for profile ${id} (${dto.reason ?? 'manual'})`,
+        message,
         profileId: id,
         at: new Date().toISOString(),
       });
     }
-    return this.findOne(id);
+    return profile;
   }
 
   /** Grant extra minutes for today and lift a quota-based pause if present. */
@@ -197,7 +292,14 @@ export class ProfilesService {
     const ids: string[] = [];
     for (const d of devices) {
       if (d.clientId) ids.push(d.clientId); // durable anchor
-      if (d.macAddress && !d.macRandomized) ids.push(d.macAddress);
+      // NOTE: no MAC here. AdGuard's *client* definitions accept a MAC, but its
+      // access list (which is what enforces a block) accepts only an IP, a CIDR
+      // or a ClientID — a MAC makes the whole request fail with
+      //   400 "bad ip, cidr, or ClientID"
+      // and then NOTHING is blocked. That failure only appears once devices
+      // have MACs at all, i.e. after a router provider is enabled, so pause and
+      // bedtime silently stop working the moment the router integration lands.
+      // The MAC is still used for router-level enforcement (setBlockedMacs).
       if (d.ipAddress) ids.push(d.ipAddress);
     }
     return [...new Set(ids)];

@@ -43,6 +43,14 @@ export class CreateProfileDto {
 
 export class UpdateProfileDto extends CreateProfileDto {
   @IsOptional()
+  @IsIn(['auto', 'off'])
+  internetSwitch?: 'auto' | 'off';
+
+  @IsOptional()
+  @IsBoolean()
+  bedtimeEnabled?: boolean;
+
+  @IsOptional()
   @IsString()
   declare name: string;
 }

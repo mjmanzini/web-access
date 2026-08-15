@@ -5,10 +5,10 @@ import { ActivityService } from './activity.service';
 export class ActivityController {
   constructor(private readonly activity: ActivityService) {}
 
-  /** Recent DNS activity, newest first. */
+  /** Recent DNS activity, newest first; optionally just one device's. */
   @Get()
-  recent(@Query('limit') limit?: string) {
-    return this.activity.recent(limit ? Number(limit) : 100);
+  recent(@Query('limit') limit?: string, @Query('deviceId') deviceId?: string) {
+    return this.activity.recent(limit ? Number(limit) : 100, deviceId);
   }
 
   /** Top visited domains, optionally filtered by device/profile. */

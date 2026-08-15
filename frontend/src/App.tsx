@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { NavLink, Navigate, Route, Routes } from 'react-router-dom';
+import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import Dashboard from './pages/Dashboard';
 import Devices from './pages/Devices';
 import Profiles from './pages/Profiles';
@@ -7,7 +7,9 @@ import Rules from './pages/Rules';
 import Activity from './pages/Activity';
 import Requests from './pages/Requests';
 import Login from './pages/Login';
+import Account from './pages/Account';
 import AlertsFeed from './components/AlertsFeed';
+import ErrorBoundary from './components/ErrorBoundary';
 import { auth } from './api/auth';
 
 const NAV = [
@@ -17,10 +19,12 @@ const NAV = [
   { to: '/rules', label: 'Rules' },
   { to: '/requests', label: 'Requests' },
   { to: '/activity', label: 'Activity' },
+  { to: '/account', label: 'Account' },
 ];
 
 export default function App() {
   const [authed, setAuthed] = useState(auth.isAuthed);
+  const { pathname } = useLocation();
   useEffect(() => auth.subscribe(setAuthed), []);
 
   if (!authed) return <Login />;
@@ -48,6 +52,8 @@ export default function App() {
       </aside>
 
       <main className="main">
+        {/* Keyed on the route so navigating away from a crashed page clears it. */}
+        <ErrorBoundary key={pathname}>
         <Routes>
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<Dashboard />} />
@@ -56,7 +62,9 @@ export default function App() {
           <Route path="/rules" element={<Rules />} />
           <Route path="/requests" element={<Requests />} />
           <Route path="/activity" element={<Activity />} />
+          <Route path="/account" element={<Account />} />
         </Routes>
+        </ErrorBoundary>
       </main>
 
       <AlertsFeed />

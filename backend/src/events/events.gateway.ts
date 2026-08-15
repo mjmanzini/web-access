@@ -1,5 +1,8 @@
-import { Logger } from '@nestjs/common';
+import { Logger, Optional } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { postWebhook } from '../common/webhook.util';
+import { RateLimiter } from '../common/rate-limit.util';
+import { PushService } from '../push/push.service';
 import {
   OnGatewayConnection,
   OnGatewayDisconnect,
@@ -44,7 +47,11 @@ export class EventsGateway
   @WebSocketServer()
   server: Server;
 
-  constructor(private readonly jwt: JwtService) {}
+  constructor(
+    private readonly jwt: JwtService,
+    // Optional so the gateway still works if push is not configured.
+    @Optional() private readonly push?: PushService,
+  ) {}
 
   /** Reject any socket that doesn't present a valid JWT in its handshake. */
   handleConnection(client: Socket) {
@@ -67,8 +74,12 @@ export class EventsGateway
 
   /** Broadcast an alert to all connected dashboards (+ optional webhook). */
   emitAlert(alert: Alert): void {
+    // The live dashboard feed sees everything, unfiltered.
     this.server?.emit('alert', alert);
+    // Anything that interrupts a person passes the shared filter first.
+    if (!this.shouldNotify(alert)) return;
     this.maybeWebhook(alert);
+    this.maybePush(alert);
   }
 
   /** Push a live activity row for the streaming feed. */
@@ -76,14 +87,64 @@ export class EventsGateway
     this.server?.emit('activity', row);
   }
 
+  /**
+   * Alert types that are useful in the dashboard's live feed but must never
+   * reach a phone: one message per blocked DNS query means hundreds of pings a
+   * day, and the webhook provider rate-limits (Discord: ~5 posts / 2s), so the
+   * genuinely important alerts get dropped in the noise.
+   */
+  private static readonly FEED_ONLY_TYPES = new Set(['blocked_access']);
+
+  /** Same alert about the same subject at most once per 10 minutes. */
+  private static readonly cooldown = new RateLimiter(1, 10 * 60_000);
+
+  /** Backstop against any unforeseen storm: 15 messages per 10 minutes total. */
+  private static readonly budget = new RateLimiter(15, 10 * 60_000);
+
+  /**
+   * One decision for every outbound channel. Keeping this shared matters: the
+   * dashboard feed shows everything, but anything that interrupts a person —
+   * Discord, push — must pass the same filter, or a phone gets spammed by
+   * exactly the traffic the webhook was protected from.
+   */
+  private shouldNotify(alert: Alert): boolean {
+    if (EventsGateway.FEED_ONLY_TYPES.has(alert.type)) return false;
+
+    const subject = alert.deviceId ?? alert.profileId ?? alert.domain ?? '';
+    if (!EventsGateway.cooldown.allow(`${alert.type}:${subject}`)) return false;
+    if (!EventsGateway.budget.allow('global')) {
+      this.logger.warn('alert budget reached — suppressing notifications for now');
+      return false;
+    }
+    return true;
+  }
+
   private maybeWebhook(alert: Alert): void {
     const url = process.env.ALERT_WEBHOOK_URL;
     if (!url) return;
+
+    const icon =
+      alert.severity === 'critical' ? '🚨' : alert.severity === 'warning' ? '⚠️' : 'ℹ️';
     // Fire-and-forget; never let webhook failure affect the request path.
-    fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: `[${alert.severity}] ${alert.message}` }),
-    }).catch((e) => this.logger.warn(`webhook failed: ${e.message}`));
+    void postWebhook(url, `${icon} **Home Guardian** — ${alert.message}`, (m) =>
+      this.logger.warn(`webhook failed: ${m}`),
+    );
+  }
+
+  /**
+   * Web Push to the installed dashboard. Deliberately fed from the same
+   * filtered path as the webhook (see maybeWebhook's cooldown/budget), so a
+   * phone can never be spammed by something Discord was protected from.
+   */
+  private maybePush(alert: Alert): void {
+    if (!this.push?.isEnabled()) return;
+    void this.push
+      .send({
+        title: alert.severity === 'critical' ? 'Home Guardian — urgent' : 'Home Guardian',
+        body: alert.message,
+        url: '/dashboard',
+        tag: `${alert.type}:${alert.deviceId ?? alert.profileId ?? ''}`,
+      })
+      .catch((e: Error) => this.logger.warn(`push failed: ${e.message}`));
   }
 }

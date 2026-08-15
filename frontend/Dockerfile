@@ -4,6 +4,11 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm install
 COPY . .
+# Baked into the bundle at build time. Leave empty for same-origin /api (the
+# Cloudflare Pages + Tunnel setup); set it when this container serves the
+# dashboard directly and the API lives on another origin/port.
+ARG VITE_API_BASE=""
+ENV VITE_API_BASE=$VITE_API_BASE
 RUN npm run build
 
 # ---- serve (static) ----

@@ -39,6 +39,9 @@ export class HealthService implements OnModuleInit {
     adguard: { name: 'adguard', up: true, fails: 0, lastOkAt: null, downSince: null },
   };
 
+  /** Last DNS-steering verdict, so the alert fires on change, not every check. */
+  private steeringOk: boolean | null = null;
+
   constructor(
     @Inject(NETWORK_PROVIDER) private network: NetworkProvider,
     @Inject(ROUTER_PROVIDER) private router: RouterProvider,
@@ -79,11 +82,49 @@ export class HealthService implements OnModuleInit {
     await this.check('adguard', async () => (await this.network.getStatus()).running);
     if (this.components.router) {
       await this.check('router', async () => (await this.router.getStatus()).reachable);
+      await this.checkDnsSteering();
     }
     // Dead-man switch: only ping when fully healthy, so a degraded state also
     // trips the external monitor (missing ping == something is wrong).
     if (this.pingUrl && Object.values(this.components).every((c) => c.up)) {
       this.ping();
+    }
+  }
+
+  /**
+   * Is the router still handing out the filter as the DNS server?
+   *
+   * This silently reverted in the field: the router put its own address back as
+   * both primary and secondary, so every DHCP device stopped being filtered
+   * while the dashboard happily reported rules enforced and blocks applied.
+   * Nothing else in the system can detect that — AdGuard is healthy, the rules
+   * are correct, the devices simply stop asking. Only the router knows, so ask
+   * the router.
+   */
+  private async checkDnsSteering(): Promise<void> {
+    const expected = this.config.get<string>('ADGUARD_LAN_IP', '').trim();
+    if (!expected || !this.router.getDhcpDns) return;
+
+    const dns = await this.router.getDhcpDns();
+    if (!dns) return;
+
+    const ok = dns.primary === expected;
+    if (ok === this.steeringOk) return; // only announce changes
+    this.steeringOk = ok;
+
+    if (!ok) {
+      this.events.emitAlert({
+        type: 'system_down',
+        severity: 'critical',
+        message:
+          `Your router is no longer sending devices to Home Guardian for DNS ` +
+          `(it is handing out ${dns.primary ?? 'nothing'} instead of ${expected}). ` +
+          `Filtering and bedtime will not apply to devices as their leases renew.`,
+        at: new Date().toISOString(),
+      });
+      this.logger.warn(`DNS steering LOST — router hands out ${dns.primary}, expected ${expected}`);
+    } else {
+      this.logger.log('DNS steering verified — router points at Home Guardian');
     }
   }
 

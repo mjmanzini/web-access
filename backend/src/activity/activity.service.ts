@@ -80,10 +80,30 @@ export class ActivityService {
       row.domain === FIREFOX_DOH_CANARY;
 
     if (isBypass) {
+      // Not every DoH/DoT lookup is a child evading anything:
+      //
+      //  - Android probes dns.google constantly for its Private DNS feature,
+      //    and Firefox queries the canary domain on every start. Those are OS
+      //    behaviour, and alerting on them trains a parent to ignore alerts.
+      //  - If our anti-bypass rules already blocked it, containment worked —
+      //    that is a success, not an incident.
+      //  - On a device that belongs to no profile (a parent's own phone) there
+      //    is nothing to evade in the first place.
+      //
+      // What is worth interrupting someone for: a *managed* device that
+      // successfully reached a private resolver, i.e. it now has a way to
+      // resolve around us.
+      const isCanary = row.domain === FIREFOX_DOH_CANARY;
+      const wasContained = row.action === 'blocked';
+      const isManaged = !!device?.profileId;
+      if (isCanary || wasContained || !isManaged) return;
+
       this.events.emitAlert({
         type: 'bypass_attempt',
-        severity: 'critical',
-        message: `${device?.name ?? row.clientIp} tried to reach a DNS-bypass resolver (${row.domain}).`,
+        severity: 'warning',
+        message:
+          `${device?.name ?? row.clientIp} reached a private DNS resolver (${row.domain}) that was NOT blocked — ` +
+          `it may be able to resolve around Home Guardian. Check the device's Private DNS setting.`,
         deviceId: device?.id ?? null,
         profileId: device?.profileId ?? null,
         domain: row.domain,
@@ -92,23 +112,63 @@ export class ActivityService {
       return;
     }
 
-    if (row.action === 'blocked') {
-      this.events.emitAlert({
-        type: 'blocked_access',
-        severity: 'warning',
-        message: `${device?.name ?? row.clientIp} was blocked from ${row.domain}.`,
-        deviceId: device?.id ?? null,
-        profileId: device?.profileId ?? null,
-        domain: row.domain,
-        at: row.timestamp.toISOString(),
-      });
-    }
+    // A blocked query is not an event worth announcing — it is the system
+    // doing its job, hundreds of times an hour, and during bedtime it is
+    // EVERY query. Alerting on it buried the alerts that matter and made the
+    // feed unreadable. This data already lives in Activity, which is filterable
+    // per device and is the right place to look at it.
+    //
+    // Deliberately no emitAlert here.
   }
 
   // ---- read APIs for the dashboard ----
 
-  recent(limit = 100): Promise<ActivityLog[]> {
-    return this.logs.find({ order: { timestamp: 'DESC' }, take: limit });
+  /**
+   * Recent activity, newest first, with each row's device name attached so the
+   * dashboard can show "Jastice's phone" instead of a bare 192.168.8.60. Rows
+   * are denormalized by design, so the name is resolved at read time rather
+   * than stored — a rename is reflected across all history immediately.
+   */
+  async recent(
+    limit = 100,
+    deviceId?: string,
+  ): Promise<Array<ActivityLog & { deviceName: string | null }>> {
+    // Rows keep the deviceId they were ingested with, which goes stale when a
+    // device row is replaced (a re-scan that supersedes a MAC-less entry, say).
+    // Match on the stored id OR the client IP so a device's history stays whole
+    // instead of splitting into "before" and "after" halves.
+    const target = deviceId
+      ? await this.devices.findOne({ where: { id: deviceId } })
+      : null;
+
+    // Filtering server-side matters: a chatty phone can fill the whole window,
+    // so a client-side filter would show "no activity" for quieter devices.
+    const rows = await this.logs.find({
+      where: deviceId
+        ? target?.ipAddress
+          ? [{ deviceId }, { clientIp: target.ipAddress }]
+          : { deviceId }
+        : {},
+      order: { timestamp: 'DESC' },
+      take: limit,
+    });
+
+    // Resolve names by id first, then by current IP holder — the latter rescues
+    // rows whose device row no longer exists.
+    const devices = await this.devices.find();
+    const byId = new Map(devices.map((d) => [d.id, d]));
+    const byIp = new Map(devices.filter((d) => d.ipAddress).map((d) => [d.ipAddress, d]));
+
+    return rows.map((r) => {
+      const device = (r.deviceId ? byId.get(r.deviceId) : null) ?? byIp.get(r.clientIp);
+      return {
+        ...r,
+        // Report the *current* device id so the dashboard groups history under
+        // one entry per device rather than one per superseded row.
+        deviceId: device?.id ?? r.deviceId,
+        deviceName: device?.name ?? null,
+      };
+    });
   }
 
   /** Top domains for a device/profile over the last `hours`. */

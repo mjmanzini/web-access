@@ -7,7 +7,11 @@ import {
   ProfilePolicy,
 } from '../network-provider.interface';
 import { AdguardApiClient, AdguardClient } from './adguard.client';
-import { servicesForCategories, needsParental } from '../../common/categories';
+import {
+  CATEGORY_DEFINITIONS,
+  servicesForCategories,
+  needsParental,
+} from '../../common/categories';
 import { buildAntiBypassRules } from './anti-bypass';
 import { normalizeMac } from '../../common/mac.util';
 
@@ -24,7 +28,7 @@ export class AdguardService implements NetworkProvider {
   /** Marker so we only ever manage our own rules inside AdGuard's user_rules. */
   private static readonly MANAGED_TAG = '# home-guardian:managed';
 
-  constructor(config: ConfigService) {
+  constructor(private readonly config: ConfigService) {
     this.api = new AdguardApiClient({
       baseUrl: config.get<string>('ADGUARD_URL', 'http://adguardhome:80'),
       username: config.get<string>('ADGUARD_USERNAME', 'admin'),
@@ -52,6 +56,10 @@ export class AdguardService implements NetworkProvider {
     const byIp = new Map<string, DiscoveredDevice>();
 
     for (const c of auto_clients) {
+      // "etc/hosts" entries are the AdGuard host's own hosts file — container
+      // hostnames, ip6-allnodes, localhost and friends. They are artifacts of
+      // where AdGuard runs, not devices on the family's network.
+      if (c.source === 'etc/hosts') continue;
       byIp.set(c.ip, {
         ip: c.ip,
         mac: null,
@@ -117,6 +125,22 @@ export class AdguardService implements NetworkProvider {
     if (policy.blockDnsBypass) rules.push(...buildAntiBypassRules(name));
     await this.setManagedBucket(policy.clientKey, rules);
 
+    // Categories backed by a hosted blocklist (e.g. gambling, which AdGuard has
+    // no first-class "service" for). Filter lists are global in AdGuard, so this
+    // applies network-wide rather than to this profile alone — the alternative
+    // was leaving the category silently unenforced.
+    for (const slug of policy.blockedCategories) {
+      const url = CATEGORY_DEFINITIONS[slug]?.blocklistUrl;
+      if (!url) continue;
+      try {
+        await this.api.addFilterUrl(url, `Home Guardian — ${slug}`);
+      } catch (err) {
+        this.logger.warn(
+          `could not subscribe ${slug} blocklist: ${(err as Error).message}`,
+        );
+      }
+    }
+
     this.logger.log(
       `Applied policy for ${policy.displayName} (${policy.identifiers.length} ids)`,
     );
@@ -141,12 +165,46 @@ export class AdguardService implements NetworkProvider {
     await this.setManagedBucket('__global__', rules);
   }
 
+  /**
+   * Cut a set of clients off, by ANSWERING every query with a block rather than
+   * refusing to serve them.
+   *
+   * The obvious implementation — AdGuard's access list (`disallowed_clients`) —
+   * is actively harmful whenever a secondary DNS server is handed out: AdGuard
+   * drops/refuses the query, the client treats that as "this resolver is down",
+   * fails over to the secondary (typically the router), and resolves everything
+   * unfiltered. Bedtime then appears to do nothing. Android is especially quick
+   * to fail over because it queries configured resolvers in parallel.
+   *
+   * A client-scoped catch-all filter rule keeps the client talking to AdGuard —
+   * it gets a prompt 0.0.0.0 for every name, so there is no failure to fail over
+   * from, and the block actually holds.
+   */
   async setBlockedClientIdentifiers(identifiers: string[]): Promise<void> {
+    const unique = [...new Set(identifiers)];
+    // The child's own status page ("why isn't my tablet working?") lives on the
+    // local portal host. A catch-all block would take that page down for
+    // exactly the devices that need it, so every blocked client keeps an
+    // explicit exception for it. @@ rules win over blocks in AdGuard.
+    const portal = this.config
+      .get<string>('PORTAL_HOSTNAME', 'homeguardian.co.za')
+      .trim();
+    const rules: string[] = [];
+    for (const id of unique) {
+      rules.push(`||*^$client='${id}'`);
+      if (portal) rules.push(`@@||${portal}^$client='${id}'`);
+    }
+    await this.setManagedBucket('__blocked__', rules);
+
+    // Retire any access-list entries a previous version left behind, so the
+    // refuse-to-serve path can't reintroduce the failover it caused.
     const list = await this.api.getAccessList();
-    await this.api.setAccessList({
-      ...list,
-      disallowed_clients: [...new Set(identifiers)],
-    });
+    if (list.disallowed_clients.length) {
+      await this.api.setAccessList({ ...list, disallowed_clients: [] });
+      this.logger.log(
+        `Cleared ${list.disallowed_clients.length} access-list entr(ies); blocking now uses client-scoped rules`,
+      );
+    }
   }
 
   async fetchQueryLog(limit: number): Promise<NetworkQueryLogEntry[]> {
@@ -187,6 +245,33 @@ export class AdguardService implements NetworkProvider {
     key: string,
     rules: string[] | null,
   ): Promise<void> {
+    // AdGuard has ONE user-rules list, and updating a bucket means read the
+    // whole list, edit it, write the whole list back. Two of those cycles
+    // interleaving (the enforce tick pushing __blocked__ while a profile policy
+    // push rewrites its own bucket) both read the same "before" state and the
+    // slower writer's version wins — silently deleting the other bucket. That
+    // is exactly how a paused profile ended up with no block rule in AdGuard
+    // while the database still said "paused": enforcement looked applied on
+    // every screen we had, and the tablet browsed. Serialize the cycles.
+    return this.withRulesLock(() => this.rewriteBucket(key, rules));
+  }
+
+  /** Serializes every read-modify-write cycle over the shared rules list. */
+  private rulesLock: Promise<unknown> = Promise.resolve();
+
+  private withRulesLock<T>(fn: () => Promise<T>): Promise<T> {
+    // Chain onto the previous cycle whether it resolved or rejected: one failed
+    // write must not wedge every later write behind a permanently rejected
+    // promise.
+    const run = this.rulesLock.then(fn, fn);
+    this.rulesLock = run.catch(() => undefined);
+    return run;
+  }
+
+  private async rewriteBucket(
+    key: string,
+    rules: string[] | null,
+  ): Promise<void> {
     const existing = await this.api.getUserRules();
     const tag = AdguardService.MANAGED_TAG;
 
@@ -215,6 +300,17 @@ export class AdguardService implements NetworkProvider {
     // Reassemble: admin rules first, then our tagged managed block.
     const rebuilt = [...adminRules, tag];
     for (const [k, r] of buckets) rebuilt.push(`# client:${k}`, ...r);
+
+    // No-op writes are skipped, which makes re-pushing the whole enforcement
+    // set on a timer cheap enough to do unconditionally — so if a bucket ever
+    // does go missing, the next tick puts it back instead of waiting for a
+    // state change that may never come.
+    if (
+      rebuilt.length === existing.length &&
+      rebuilt.every((line, i) => line === existing[i])
+    ) {
+      return;
+    }
     await this.api.setUserRules(rebuilt);
   }
 }

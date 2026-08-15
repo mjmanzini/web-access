@@ -12,7 +12,24 @@ export interface Profile {
   dailyTimeLimitMinutes: number | null;
   internetPaused: boolean;
   pausedReason: string | null;
+  /** Parent kill switch: 'off' blocks regardless of schedule or quota. */
+  internetSwitch: 'auto' | 'off';
+  /** Whether bedtime windows apply to this profile at all. */
+  bedtimeEnabled: boolean;
   devices?: Device[];
+}
+
+/** A recurring block window for a profile — bedtime, homework hours, etc. */
+export interface Schedule {
+  id: string;
+  label: string;
+  /** 0=Sun .. 6=Sat. Empty means every day. */
+  daysOfWeek: string[];
+  /** 24h "HH:mm" local time; a window may cross midnight (start > end). */
+  startTime: string;
+  endTime: string;
+  enabled: boolean;
+  profileId: string;
 }
 
 export interface Device {
@@ -25,6 +42,10 @@ export interface Device {
   vendor: string | null;
   isOnline: boolean;
   lastSeenAt: string | null;
+  /** When the filter last saw a DNS query from this device. */
+  lastFilteredAt?: string | null;
+  /** False when the device is online but resolving somewhere other than us. */
+  usingFilter?: boolean;
   blocked: boolean;
   profileId: string | null;
 }
@@ -57,6 +78,8 @@ export interface ActivityLog {
   domain: string;
   action: 'allowed' | 'blocked' | 'rewritten';
   category: string | null;
+  /** Friendly device name resolved at read time; null for unknown clients. */
+  deviceName: string | null;
 }
 
 export interface BandwidthRow {

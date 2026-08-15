@@ -2,6 +2,27 @@ import { normalizeMac } from '../../common/mac.util';
 import { RouterLease } from '../router-provider.interface';
 import { blocks, tag, buildRequest } from './xml';
 
+/**
+ * Parse /api/lan/HostInfo — the richer feed. Unlike /api/wlan/host-list it
+ * includes devices the router knows but that are not currently connected
+ * (`Active` 0), so switched-off devices stay in the inventory instead of
+ * vanishing. `ActualName` is the label set in the router UI and wins over the
+ * device's self-reported `HostName` when both are present.
+ */
+export function parseHostInfo(xml: string): RouterLease[] {
+  const leases: RouterLease[] = [];
+  for (const host of blocks(xml, 'Host')) {
+    const mac = normalizeMac(tag(host, 'MacAddress'));
+    const ip = tag(host, 'IpAddress');
+    if (!mac || !ip) continue;
+    const actual = tag(host, 'ActualName');
+    const reported = tag(host, 'HostName');
+    const name = [actual, reported].find((n) => n && n !== 'unknown') ?? null;
+    leases.push({ ip, mac, hostname: name, online: tag(host, 'Active') === '1' });
+  }
+  return leases;
+}
+
 /** Parse /api/wlan/host-list (or /api/lan/HostInfo) into leases. */
 export function parseHostList(xml: string): RouterLease[] {
   const leases: RouterLease[] = [];
