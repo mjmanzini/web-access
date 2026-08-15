@@ -16,6 +16,7 @@ import {
 } from '../router/router-provider.interface';
 import { EventsGateway } from '../events/events.gateway';
 import { SchedulesService } from '../schedules/schedules.service';
+import { effectiveState } from '../common/effective-state';
 import {
   CreateProfileDto,
   PauseProfileDto,
@@ -68,6 +69,9 @@ export class ProfilesService {
   async update(id: string, dto: UpdateProfileDto): Promise<Profile> {
     await this.profiles.update(id, dto);
     await this.syncProfile(id);
+    // A switch (or a changed daily limit) changes the effective state, so
+    // recompute immediately rather than leaving it until the next tick.
+    await this.reevaluate(id);
     return this.findOne(id);
   }
 
@@ -78,18 +82,67 @@ export class ProfilesService {
   }
 
   /** Instant pause/resume for a whole profile (manual, bedtime, or quota). */
-  async setPaused(id: string, dto: PauseProfileDto): Promise<Profile> {
-    // A parent resuming by hand outranks the automation. Without an explicit
-    // override the scheduler re-pauses on its next tick and Resume looks broken.
-    // The override lasts until the restriction would have lifted on its own.
-    const isManualResume = !dto.paused && !dto.reason;
-    const overrideUntil = isManualResume ? await this.overrideEndFor(id) : null;
+  /**
+   * Flip the parent's manual kill switch. This is all a pause/resume control
+   * does now: it sets an *input*, and the evaluator recomputes the effective
+   * state from it. Writing internetPaused directly is what previously left the
+   * scheduler and the parent fighting over the same field.
+   */
+  async setSwitch(id: string, internetSwitch: 'auto' | 'off'): Promise<Profile> {
+    await this.profiles.update(id, { internetSwitch });
+    await this.reevaluate(id);
+    return this.findOne(id);
+  }
 
+  /** Turn bedtime windows on or off for this profile, independently. */
+  async setBedtimeEnabled(id: string, bedtimeEnabled: boolean): Promise<Profile> {
+    await this.profiles.update(id, { bedtimeEnabled });
+    await this.reevaluate(id);
+    return this.findOne(id);
+  }
+
+  /**
+   * Recompute now instead of waiting up to a minute for the next tick, so a
+   * switch takes effect while the parent is still looking at it.
+   */
+  async reevaluate(id: string): Promise<void> {
+    const profile = await this.profiles.findOne({
+      where: { id },
+      relations: { schedules: true },
+    });
+    if (!profile) return;
+
+    const now = new Date();
+    const active = (profile.schedules ?? []).find((s) => SchedulesService.isActive(s, now));
+    const date = now.toISOString().slice(0, 10);
+    const usage = await this.dailyUsage.findOne({ where: { profileId: id, date } });
+
+    const state = effectiveState({
+      internetSwitch: profile.internetSwitch ?? 'auto',
+      bedtimeEnabled: profile.bedtimeEnabled ?? true,
+      inBedtimeWindow: !!active,
+      bedtimeEndsAt: active?.endTime ?? null,
+      dailyLimitMinutes: profile.dailyTimeLimitMinutes,
+      usedMinutes: usage?.usedMinutes ?? 0,
+      bonusMinutes: usage?.bonusMinutes ?? 0,
+    });
+
+    await this.applyEffectiveState(
+      id,
+      state.blocked,
+      state.cause === 'quota' ? 'quota_exceeded' : state.cause ?? undefined,
+    );
+  }
+
+  /** Persist the computed state and push enforcement. */
+  async applyEffectiveState(id: string, blocked: boolean, reason?: string): Promise<Profile> {
+    return this.setPaused(id, { paused: blocked, reason });
+  }
+
+  async setPaused(id: string, dto: PauseProfileDto): Promise<Profile> {
     await this.profiles.update(id, {
       internetPaused: dto.paused,
       pausedReason: dto.paused ? (dto.reason ?? 'manual') : null,
-      // Pausing (or an automated resume) drops any override.
-      overrideUntil,
     });
     await this.syncBlockedIdentifiers();
     if (dto.paused) {
@@ -102,40 +155,6 @@ export class ProfilesService {
       });
     }
     return this.findOne(id);
-  }
-
-  /**
-   * How long a manual resume should hold: past every restriction currently in
-   * force. A bedtime window runs to its end time; an exhausted daily quota
-   * resets at local midnight. Returns null when nothing is restricting the
-   * profile, so a resume of an idle profile grants no special status.
-   */
-  private async overrideEndFor(id: string): Promise<Date | null> {
-    const profile = await this.profiles.findOne({
-      where: { id },
-      relations: { schedules: true },
-    });
-    if (!profile) return null;
-
-    const now = new Date();
-    const ends: Date[] = [];
-
-    for (const schedule of profile.schedules ?? []) {
-      if (SchedulesService.isActive(schedule, now)) {
-        ends.push(SchedulesService.endsAt(schedule, now));
-      }
-    }
-
-    if (profile.dailyTimeLimitMinutes != null) {
-      const midnight = new Date(now);
-      midnight.setHours(24, 0, 0, 0);
-      ends.push(midnight);
-    }
-
-    if (!ends.length) return null;
-    // Hold past the last one, so a resume during bedtime isn't undone by a
-    // quota that resets sooner.
-    return new Date(Math.max(...ends.map((d) => d.getTime())));
   }
 
   /** Grant extra minutes for today and lift a quota-based pause if present. */

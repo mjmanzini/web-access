@@ -66,13 +66,20 @@ export class Profile {
   pausedReason: string | null;
 
   /**
-   * A parent's manual Resume beats the automation until the restriction it
-   * overrode would naturally have ended (bedtime window end, or the daily quota
-   * reset). Without this the scheduler simply re-paused the profile on its next
-   * minute tick and "Resume" appeared not to work at all.
+   * Parent's manual kill switch. 'off' blocks the profile no matter what the
+   * schedule says; 'auto' hands control to bedtime and the daily limit. Sticky:
+   * nothing automatic ever changes it.
    */
-  @Column({ type: 'timestamptz', nullable: true })
-  overrideUntil: Date | null;
+  @Column({ type: 'varchar', default: 'auto' })
+  internetSwitch: 'auto' | 'off';
+
+  /**
+   * Whether bedtime windows apply at all. Independent of the kill switch, so a
+   * parent can cancel bedtime for a night without also having to remember to
+   * re-enable something else.
+   */
+  @Column({ default: true })
+  bedtimeEnabled: boolean;
 
   // ---- Relations ----
 

@@ -4,6 +4,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Profile } from '../entities/profile.entity';
 import { Schedule } from '../entities/schedule.entity';
+import { effectiveState } from '../common/effective-state';
 import { DailyUsage } from '../entities/daily-usage.entity';
 import { ProfilesService } from '../profiles/profiles.service';
 import { DevicesService } from '../devices/devices.service';
@@ -58,40 +59,34 @@ export class SchedulerService {
     });
 
     for (const profile of profiles) {
-      // Manual pause is sticky — automation never overrides a human decision.
-      if (profile.internetPaused && profile.pausedReason === 'manual') continue;
-
-      // Nor does it override a manual *resume*: a parent who lifts bedtime gets
-      // it lifted until that window (or the quota day) would have ended anyway.
-      if (profile.overrideUntil) {
-        if (now < profile.overrideUntil) continue;
-        await this.profiles.update(profile.id, { overrideUntil: null });
-        profile.overrideUntil = null;
-        this.logger.log(`Parent override expired for "${profile.name}" — automation resumed`);
-      }
-
       const used = await this.activity.activeMinutesToday(profile.id);
       const bonus = await this.recordUsage(profile.id, used);
 
-      const overQuota =
-        profile.dailyTimeLimitMinutes != null &&
-        used >= profile.dailyTimeLimitMinutes + bonus;
-      const inBlockWindow = (profile.schedules ?? []).some((s) =>
+      const active = (profile.schedules ?? []).find((s) =>
         SchedulesService.isActive(s, now),
       );
 
-      const shouldPause = overQuota || inBlockWindow;
-      const reason = overQuota ? 'quota_exceeded' : inBlockWindow ? 'bedtime' : undefined;
+      // One decision, from the two switches plus the automatic conditions.
+      // No special-casing here: the switches are the inputs, internetPaused /
+      // pausedReason are simply the computed output, recomputed every minute.
+      const state = effectiveState({
+        internetSwitch: profile.internetSwitch ?? 'auto',
+        bedtimeEnabled: profile.bedtimeEnabled ?? true,
+        inBedtimeWindow: !!active,
+        bedtimeEndsAt: active?.endTime ?? null,
+        dailyLimitMinutes: profile.dailyTimeLimitMinutes,
+        usedMinutes: used,
+        bonusMinutes: bonus,
+      });
 
-      if (shouldPause !== profile.internetPaused) {
-        await this.profilesService.setPaused(profile.id, {
-          paused: shouldPause,
-          reason,
-        });
-        this.logger.log(
-          `${shouldPause ? 'Paused' : 'Resumed'} "${profile.name}"` +
-            (reason ? ` (${reason})` : ''),
-        );
+      const reason = state.cause === 'quota' ? 'quota_exceeded' : state.cause ?? undefined;
+      const changed =
+        state.blocked !== profile.internetPaused ||
+        (state.blocked && reason !== profile.pausedReason);
+
+      if (changed) {
+        await this.profilesService.applyEffectiveState(profile.id, state.blocked, reason);
+        this.logger.log(`"${profile.name}" → ${state.summary}`);
       }
     }
   }

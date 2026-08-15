@@ -38,6 +38,17 @@ export default function Profiles() {
     await api.pauseProfile(p.id, !p.internetPaused);
     load();
   };
+
+  /** The two independent inputs. Each just sets a field; the backend
+      recomputes the effective state and pushes enforcement immediately. */
+  const setSwitch = async (p: Profile, internetSwitch: 'auto' | 'off') => {
+    await api.updateProfile(p.id, { internetSwitch });
+    load();
+  };
+  const setBedtime = async (p: Profile, bedtimeEnabled: boolean) => {
+    await api.updateProfile(p.id, { bedtimeEnabled });
+    load();
+  };
   const toggleCategory = async (p: Profile, cat: string) => {
     const set = new Set(p.blockedCategories);
     set.has(cat) ? set.delete(cat) : set.add(cat);
@@ -74,27 +85,33 @@ export default function Profiles() {
                 <strong>{p.name}</strong>{' '}
                 <span className="badge muted">{p.kind}</span>
               </div>
-              <button className={p.internetPaused ? 'ghost' : 'danger'} onClick={() => togglePause(p)}>
-                {p.internetPaused ? 'Resume' : 'Pause'}
-              </button>
             </div>
 
-            {p.internetPaused && (
-              <div className="badge danger" style={{ marginBottom: 10 }}>
-                paused · {p.pausedReason}
-              </div>
-            )}
-            {/* A manual resume outranks bedtime/quota until they'd have ended
-                anyway — say so, or it looks like the schedule was deleted. */}
-            {!p.internetPaused && p.overrideUntil && (
-              <div className="badge warn" style={{ marginBottom: 10 }}>
-                resumed by you · bedtime overridden until{' '}
-                {new Date(p.overrideUntil).toLocaleTimeString([], {
-                  hour: '2-digit',
-                  minute: '2-digit',
-                })}
-              </div>
-            )}
+            {/* Effective state first, in plain words: what IS happening, and
+                why. The switches below are the two inputs that decide it. */}
+            <div
+              className={`badge ${p.internetPaused ? 'danger' : 'ok'}`}
+              style={{ marginBottom: 12, display: 'block' }}
+            >
+              {effectiveSummary(p)}
+            </div>
+
+            <div className="grid" style={{ gap: 8, marginBottom: 12 }}>
+              <Toggle
+                label="Internet"
+                on={p.internetSwitch !== 'off'}
+                onLabel="Auto (schedule decides)"
+                offLabel="Off — blocked no matter what"
+                onChange={(on) => setSwitch(p, on ? 'auto' : 'off')}
+              />
+              <Toggle
+                label="Bedtime schedule"
+                on={p.bedtimeEnabled !== false}
+                onLabel="On"
+                offLabel="Off — windows ignored"
+                onChange={(on) => setBedtime(p, on)}
+              />
+            </div>
 
             <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>Blocked categories</div>
             <div className="row" style={{ marginBottom: 12 }}>
@@ -149,6 +166,61 @@ export default function Profiles() {
 }
 
 const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+/** What's actually happening to this profile right now, and why. */
+function effectiveSummary(p: Profile): string {
+  if (!p.internetPaused) return 'On';
+  switch (p.pausedReason) {
+    case 'manual':
+      return 'Off — switched off by you';
+    case 'bedtime':
+      return 'Off — bedtime';
+    case 'quota_exceeded':
+      return `Off — daily limit reached${p.dailyTimeLimitMinutes ? ` (${p.dailyTimeLimitMinutes} min)` : ''}`;
+    default:
+      return 'Off';
+  }
+}
+
+/** A switch, not a button: its position shows the current setting. */
+function Toggle({
+  label,
+  on,
+  onLabel,
+  offLabel,
+  onChange,
+}: {
+  label: string;
+  on: boolean;
+  onLabel: string;
+  offLabel: string;
+  onChange: (on: boolean) => void;
+}) {
+  return (
+    <div className="row" style={{ justifyContent: 'space-between', gap: 10 }}>
+      <div>
+        <div style={{ fontSize: 13, fontWeight: 600 }}>{label}</div>
+        <div className="muted" style={{ fontSize: 11 }}>{on ? onLabel : offLabel}</div>
+      </div>
+      <button
+        role="switch"
+        aria-checked={on}
+        aria-label={label}
+        onClick={() => onChange(!on)}
+        className={on ? '' : 'ghost'}
+        style={{
+          minWidth: 62,
+          padding: '6px 10px',
+          borderRadius: 999,
+          background: on ? 'var(--ok)' : 'var(--panel-2)',
+          color: on ? '#0f1420' : 'var(--muted)',
+        }}
+      >
+        {on ? 'ON' : 'OFF'}
+      </button>
+    </div>
+  );
+}
 
 /**
  * Bedtime / block windows for a profile. The backend already enforces these

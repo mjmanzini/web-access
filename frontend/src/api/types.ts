@@ -12,8 +12,10 @@ export interface Profile {
   dailyTimeLimitMinutes: number | null;
   internetPaused: boolean;
   pausedReason: string | null;
-  /** Parent override in force until this time; automation resumes afterwards. */
-  overrideUntil: string | null;
+  /** Parent kill switch: 'off' blocks regardless of schedule or quota. */
+  internetSwitch: 'auto' | 'off';
+  /** Whether bedtime windows apply to this profile at all. */
+  bedtimeEnabled: boolean;
   devices?: Device[];
 }
 
