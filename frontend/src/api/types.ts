@@ -42,6 +42,10 @@ export interface Device {
   vendor: string | null;
   isOnline: boolean;
   lastSeenAt: string | null;
+  /** When the filter last saw a DNS query from this device. */
+  lastFilteredAt?: string | null;
+  /** False when the device is online but resolving somewhere other than us. */
+  usingFilter?: boolean;
   blocked: boolean;
   profileId: string | null;
 }

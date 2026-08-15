@@ -258,6 +258,28 @@ export default function Devices() {
                         </span>
                       </div>
                     )}
+                    {/* The state that makes everything else a lie: online, rules
+                        applied, and resolving somewhere we can't see. */}
+                    {d.isOnline && d.usingFilter === false && (
+                      <div style={{ marginTop: 4 }}>
+                        <span
+                          className="badge warn"
+                          title={
+                            'This device is connected but has not asked Home Guardian to resolve ' +
+                            'anything recently, so filtering and bedtime are NOT reaching it. ' +
+                            'Usual causes: it still holds an old DHCP lease (toggle its Wi-Fi), ' +
+                            'or Private DNS / DoT is switched on in its settings.'
+                          }
+                        >
+                          ⚠ not filtered
+                        </span>
+                        <div className="muted" style={{ fontSize: 11 }}>
+                          {d.lastFilteredAt
+                            ? `last seen by filter ${lastSeen(d.lastFilteredAt)}`
+                            : 'never seen by filter'}
+                        </div>
+                      </div>
+                    )}
                     {!d.isOnline && (
                       <div className="muted" style={{ fontSize: 11 }}>{lastSeen(d.lastSeenAt)}</div>
                     )}

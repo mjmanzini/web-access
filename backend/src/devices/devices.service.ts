@@ -9,6 +9,7 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { IsNull, Repository } from 'typeorm';
 import { Device } from '../entities/device.entity';
+import { ActivityLog } from '../entities/activity-log.entity';
 import {
   NETWORK_PROVIDER,
   NetworkProvider,
@@ -41,6 +42,7 @@ export class DevicesService implements OnModuleInit {
 
   constructor(
     @InjectRepository(Device) private devices: Repository<Device>,
+    @InjectRepository(ActivityLog) private activity: Repository<ActivityLog>,
     @Inject(NETWORK_PROVIDER) private network: NetworkProvider,
     @Inject(ROUTER_PROVIDER) private router: RouterProvider,
     private events: EventsGateway,
@@ -60,10 +62,51 @@ export class DevicesService implements OnModuleInit {
     }
   }
 
-  findAll(): Promise<Device[]> {
-    return this.devices.find({
+  /**
+   * How long an online device may go without asking us to resolve anything
+   * before we call it out. Chatty devices query constantly; even a fairly idle
+   * phone checks in every few minutes. Twenty minutes of total silence from a
+   * device the router says is connected means it is resolving somewhere else.
+   */
+  private static readonly FILTER_SILENCE_MINUTES = 20;
+
+  /**
+   * Devices, each annotated with whether the filter is actually seeing it.
+   *
+   * A device can be online, assigned to a profile, and showing blocked rules —
+   * while quietly resolving through something else entirely (a lease that
+   * predates a DNS change, or Private DNS/DoT on the device). Everything else
+   * in the dashboard reports success in that state, which is how a household
+   * can sit unprotected for an hour with nothing looking wrong.
+   */
+  async findAll(): Promise<
+    Array<Device & { lastFilteredAt: string | null; usingFilter: boolean }>
+  > {
+    const devices = await this.devices.find({
       relations: { profile: true },
       order: { lastSeenAt: 'DESC' },
+    });
+
+    // Last time each client actually asked us to resolve something. Matched by
+    // IP as well as device id, since logs keep the id they were ingested with.
+    const seen = await this.activity
+      .createQueryBuilder('a')
+      .select('a.clientIp', 'ip')
+      .addSelect('MAX(a.timestamp)', 'last')
+      .groupBy('a.clientIp')
+      .getRawMany<{ ip: string; last: Date }>();
+    const lastByIp = new Map(seen.map((r) => [r.ip, new Date(r.last)]));
+
+    const cutoff = Date.now() - DevicesService.FILTER_SILENCE_MINUTES * 60_000;
+
+    return devices.map((d) => {
+      const last = lastByIp.get(d.ipAddress) ?? null;
+      return Object.assign(d, {
+        lastFilteredAt: last ? last.toISOString() : null,
+        // Only meaningful for devices that are actually here: an offline device
+        // is silent for the obvious reason.
+        usingFilter: !d.isOnline || (!!last && last.getTime() >= cutoff),
+      });
     });
   }
 

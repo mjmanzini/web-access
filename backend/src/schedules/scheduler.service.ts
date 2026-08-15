@@ -89,6 +89,18 @@ export class SchedulerService {
         this.logger.log(`"${profile.name}" → ${state.summary}`);
       }
     }
+
+    // Reconcile every tick, not just on change. The database is the source of
+    // truth for who is blocked; AdGuard is a cache of that decision, and a cache
+    // can drift (a lost write, a manual edit, an AdGuard restart). Pushing only
+    // on change meant any drift persisted until the next state change — which,
+    // for a profile that is simply switched off, is never. The push is a no-op
+    // when the rules already match.
+    try {
+      await this.profilesService.syncBlockedIdentifiers();
+    } catch (e) {
+      this.logger.warn(`enforcement reconcile failed: ${(e as Error).message}`);
+    }
   }
 
   /** Upsert today's accrued active minutes; returns today's bonus minutes. */

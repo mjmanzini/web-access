@@ -245,6 +245,33 @@ export class AdguardService implements NetworkProvider {
     key: string,
     rules: string[] | null,
   ): Promise<void> {
+    // AdGuard has ONE user-rules list, and updating a bucket means read the
+    // whole list, edit it, write the whole list back. Two of those cycles
+    // interleaving (the enforce tick pushing __blocked__ while a profile policy
+    // push rewrites its own bucket) both read the same "before" state and the
+    // slower writer's version wins — silently deleting the other bucket. That
+    // is exactly how a paused profile ended up with no block rule in AdGuard
+    // while the database still said "paused": enforcement looked applied on
+    // every screen we had, and the tablet browsed. Serialize the cycles.
+    return this.withRulesLock(() => this.rewriteBucket(key, rules));
+  }
+
+  /** Serializes every read-modify-write cycle over the shared rules list. */
+  private rulesLock: Promise<unknown> = Promise.resolve();
+
+  private withRulesLock<T>(fn: () => Promise<T>): Promise<T> {
+    // Chain onto the previous cycle whether it resolved or rejected: one failed
+    // write must not wedge every later write behind a permanently rejected
+    // promise.
+    const run = this.rulesLock.then(fn, fn);
+    this.rulesLock = run.catch(() => undefined);
+    return run;
+  }
+
+  private async rewriteBucket(
+    key: string,
+    rules: string[] | null,
+  ): Promise<void> {
     const existing = await this.api.getUserRules();
     const tag = AdguardService.MANAGED_TAG;
 
@@ -273,6 +300,17 @@ export class AdguardService implements NetworkProvider {
     // Reassemble: admin rules first, then our tagged managed block.
     const rebuilt = [...adminRules, tag];
     for (const [k, r] of buckets) rebuilt.push(`# client:${k}`, ...r);
+
+    // No-op writes are skipped, which makes re-pushing the whole enforcement
+    // set on a timer cheap enough to do unconditionally — so if a bucket ever
+    // does go missing, the next tick puts it back instead of waiting for a
+    // state change that may never come.
+    if (
+      rebuilt.length === existing.length &&
+      rebuilt.every((line, i) => line === existing[i])
+    ) {
+      return;
+    }
     await this.api.setUserRules(rebuilt);
   }
 }
