@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+ADMIN_PASSWORD.txt
 .env*.local
 
 # Keys, certificates, and credential material (never commit)
