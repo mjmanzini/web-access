@@ -146,6 +146,34 @@ export class AdguardApiClient {
     await this.http.post('/filtering/set_rules', { rules });
   }
 
+  // ---- Filter lists ----
+  //
+  // AdGuard filter lists are a GLOBAL facility: unlike blocked-services and
+  // SafeSearch, they cannot be scoped to one client. A category backed by a
+  // hosted blocklist therefore applies network-wide.
+
+  /** Subscribed blocklist URLs, keyed by url. */
+  async listFilters(): Promise<Array<{ url: string; name: string; enabled: boolean }>> {
+    const { data } = await this.http.get('/filtering/status');
+    return (data?.filters ?? []).map((f: { url: string; name: string; enabled: boolean }) => ({
+      url: f.url,
+      name: f.name,
+      enabled: f.enabled,
+    }));
+  }
+
+  /** Subscribe to a blocklist. No-op if the URL is already present. */
+  async addFilterUrl(url: string, name: string): Promise<void> {
+    const existing = await this.listFilters();
+    if (existing.some((f) => f.url === url)) return;
+    await this.http.post('/filtering/add_url', { url, name, whitelist: false });
+  }
+
+  /** Unsubscribe from a blocklist. */
+  async removeFilterUrl(url: string): Promise<void> {
+    await this.http.post('/filtering/remove_url', { url, whitelist: false });
+  }
+
   // ---- Query log (activity feed) ----
 
   async queryLog(limit = 200): Promise<AdguardQueryLogEntry[]> {

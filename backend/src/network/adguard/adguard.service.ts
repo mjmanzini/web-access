@@ -7,7 +7,11 @@ import {
   ProfilePolicy,
 } from '../network-provider.interface';
 import { AdguardApiClient, AdguardClient } from './adguard.client';
-import { servicesForCategories, needsParental } from '../../common/categories';
+import {
+  CATEGORY_DEFINITIONS,
+  servicesForCategories,
+  needsParental,
+} from '../../common/categories';
 import { buildAntiBypassRules } from './anti-bypass';
 import { normalizeMac } from '../../common/mac.util';
 
@@ -52,6 +56,10 @@ export class AdguardService implements NetworkProvider {
     const byIp = new Map<string, DiscoveredDevice>();
 
     for (const c of auto_clients) {
+      // "etc/hosts" entries are the AdGuard host's own hosts file — container
+      // hostnames, ip6-allnodes, localhost and friends. They are artifacts of
+      // where AdGuard runs, not devices on the family's network.
+      if (c.source === 'etc/hosts') continue;
       byIp.set(c.ip, {
         ip: c.ip,
         mac: null,
@@ -116,6 +124,22 @@ export class AdguardService implements NetworkProvider {
     for (const d of policy.allowDomains) rules.push(`@@||${d}^$client='${name}'`);
     if (policy.blockDnsBypass) rules.push(...buildAntiBypassRules(name));
     await this.setManagedBucket(policy.clientKey, rules);
+
+    // Categories backed by a hosted blocklist (e.g. gambling, which AdGuard has
+    // no first-class "service" for). Filter lists are global in AdGuard, so this
+    // applies network-wide rather than to this profile alone — the alternative
+    // was leaving the category silently unenforced.
+    for (const slug of policy.blockedCategories) {
+      const url = CATEGORY_DEFINITIONS[slug]?.blocklistUrl;
+      if (!url) continue;
+      try {
+        await this.api.addFilterUrl(url, `Home Guardian — ${slug}`);
+      } catch (err) {
+        this.logger.warn(
+          `could not subscribe ${slug} blocklist: ${(err as Error).message}`,
+        );
+      }
+    }
 
     this.logger.log(
       `Applied policy for ${policy.displayName} (${policy.identifiers.length} ids)`,

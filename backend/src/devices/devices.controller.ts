@@ -1,4 +1,13 @@
-import { Body, Controller, Get, Param, Patch, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  Param,
+  Patch,
+  Post,
+} from '@nestjs/common';
 import { DevicesService } from './devices.service';
 import { UpdateDeviceDto } from './dto/device.dto';
 
@@ -33,5 +42,15 @@ export class DevicesController {
   @Patch(':id')
   update(@Param('id') id: string, @Body() dto: UpdateDeviceDto) {
     return this.devices.update(id, dto);
+  }
+
+  /**
+   * Forget a device. Useful for stale or infrastructure entries the discovery
+   * layer picked up. It reappears if it is still on the network and queries DNS.
+   */
+  @Delete(':id')
+  @HttpCode(204)
+  async remove(@Param('id') id: string): Promise<void> {
+    await this.devices.remove(id);
   }
 }

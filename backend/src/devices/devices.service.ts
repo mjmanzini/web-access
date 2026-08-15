@@ -22,6 +22,11 @@ import { ProfilesService } from '../profiles/profiles.service';
 import { isRandomizedMac, normalizeMac } from '../common/mac.util';
 import { generateClientId } from '../common/client-id.util';
 import { lookupVendor } from '../common/oui';
+import {
+  isNonDeviceAddress,
+  isPlaceholderName,
+  resolveHostname,
+} from '../common/hostname.util';
 import { UpdateDeviceDto } from './dto/device.dto';
 
 /**
@@ -105,7 +110,11 @@ export class DevicesService implements OnModuleInit {
    * Returns a summary for the controller/log. Idempotent.
    */
   async syncFromNetwork(): Promise<{ discovered: number; created: number }> {
-    const discovered = await this.network.discoverDevices();
+    const discovered = (await this.network.discoverDevices()).filter(
+      // Broadcast/multicast/loopback pseudo-clients are not devices a parent
+      // can manage; AdGuard reports them and they only clutter the list.
+      (d) => !isNonDeviceAddress(d.ip),
+    );
 
     // Merge router DHCP leases (MAC-authoritative) — enrich MACs on devices
     // AdGuard saw by IP only, and add any the router sees that AdGuard didn't.
@@ -116,12 +125,17 @@ export class DevicesService implements OnModuleInit {
         if (existing) {
           existing.mac = existing.mac ?? lease.mac;
           existing.name = existing.name ?? lease.hostname;
+          // Seen resolving DNS ⇒ online, whatever the router's table says.
+          existing.online = existing.online || lease.online === true;
         } else {
           const d = {
             ip: lease.ip,
             mac: lease.mac,
             name: lease.hostname,
-            online: true,
+            // The router feed includes devices that are switched off; recording
+            // them as online would make the dashboard claim the whole house is
+            // always connected.
+            online: lease.online ?? true,
             lastSeen: new Date(),
           };
           discovered.push(d);
@@ -130,13 +144,41 @@ export class DevicesService implements OnModuleInit {
       }
     }
 
+    // Probe unnamed addresses concurrently. Sequential probes inside the loop
+    // would add a timeout per device to every scan; here the whole batch costs
+    // roughly one timeout. Best-effort: silent nulls on networks (like most
+    // home LANs) that run neither a NetBIOS responder nor reverse DNS.
+    const probeIps = discovered.filter((d) => !d.name).map((d) => d.ip);
+    const probed = new Map<string, string>();
+    await Promise.all(
+      probeIps.map(async (ip) => {
+        const name = await resolveHostname(ip);
+        if (name) probed.set(ip, name);
+      }),
+    );
+
     let created = 0;
 
     for (const d of discovered) {
       const mac = normalizeMac(d.mac);
-      // Match on MAC first (stable), else on IP.
+      // Match on MAC first (stable). When a MAC arrives for the first time —
+      // e.g. a router provider was just enabled — adopt the existing MAC-less
+      // row for that IP instead of creating a duplicate alongside it. Only rows
+      // with no MAC are adopted, so two devices that merely shared an IP over
+      // time are never merged.
       const existing = mac
-        ? await this.devices.findOne({ where: { macAddress: mac } })
+        ? (await this.devices.findOne({ where: { macAddress: mac } })) ??
+          (await this.devices.findOne({
+            where: { ipAddress: d.ip, macAddress: IsNull() },
+          })) ??
+          // A randomized MAC is not an identity: phones rotate it, and per-SSID
+          // randomization means one device presents several. When the row on
+          // this IP carries a randomized MAC, treat the new MAC as the same
+          // device rather than spawning a duplicate — otherwise a rename the
+          // parent made is stranded on the old row.
+          (await this.devices.findOne({
+            where: { ipAddress: d.ip, macRandomized: true },
+          }))
         : await this.devices.findOne({ where: { ipAddress: d.ip } });
 
       if (existing) {
@@ -148,14 +190,25 @@ export class DevicesService implements OnModuleInit {
           existing.macRandomized = isRandomizedMac(mac);
           if (!existing.vendor) existing.vendor = lookupVendor(mac);
         }
+        // Upgrade auto-derived names when discovery learns something better.
+        // A name the parent typed is never a placeholder, so it is never lost.
+        if (isPlaceholderName(existing.name, existing.ipAddress, existing.vendor)) {
+          const better =
+            d.name ??
+            probed.get(existing.ipAddress) ??
+            (existing.vendor ? `${existing.vendor} device` : null);
+          if (better) existing.name = better;
+        }
         await this.devices.save(existing);
         continue;
       }
 
       const randomized = isRandomizedMac(mac);
       const vendor = lookupVendor(mac);
-      // Prefer discovered hostname; else a friendly "<Vendor> device"; else IP.
-      const name = d.name || (vendor ? `${vendor} device` : d.ip);
+      // Name preference: what discovery reported → what the device answers to
+      // (NetBIOS/rDNS) → "<Vendor> device" → bare IP as the last resort.
+      const name =
+        d.name || probed.get(d.ip) || (vendor ? `${vendor} device` : d.ip);
       const device = this.devices.create({
         name,
         clientId: generateClientId(name),
@@ -181,10 +234,79 @@ export class DevicesService implements OnModuleInit {
       });
     }
 
+    // Drop pseudo-clients stored before the filter above existed, plus MAC-less
+    // leftovers now superseded by a MAC-carrying row for the same IP (which is
+    // what a first router-provider sync leaves behind). Only ever removes
+    // unassigned rows, so nothing a parent has organised is touched.
+    const all = await this.devices.find();
+    const ipsWithMac = new Set(
+      all.filter((row) => row.macAddress).map((row) => row.ipAddress),
+    );
+    const stale = all.filter(
+      (row) =>
+        !row.profileId &&
+        (isNonDeviceAddress(row.ipAddress) ||
+          (!row.macAddress && ipsWithMac.has(row.ipAddress))),
+    );
+
+    // Collapse rows left behind by MAC randomization: several entries for one
+    // IP where at least one MAC is randomized. Keep the row the parent has
+    // invested in (profile, then a name they typed, then the oldest), fold the
+    // live MAC/online state into it, and drop the rest.
+    const dropped = new Set(stale.map((row) => row.id));
+    const byIpGroup = new Map<string, Device[]>();
+    for (const row of all) {
+      if (dropped.has(row.id) || !row.ipAddress) continue;
+      byIpGroup.set(row.ipAddress, [...(byIpGroup.get(row.ipAddress) ?? []), row]);
+    }
+    for (const [, group] of byIpGroup) {
+      if (group.length < 2 || !group.some((row) => row.macRandomized)) continue;
+      // Keep the row with the longest history — it holds whatever the parent
+      // renamed or assigned. Picking "first row with a non-placeholder name"
+      // is wrong: a router-supplied hostname is indistinguishable from a typed
+      // one, so that rule can discard the parent's rename in favour of the
+      // router's label.
+      const keeper =
+        group.find((row) => row.profileId) ??
+        group.reduce((a, b) => (a.createdAt <= b.createdAt ? a : b));
+      // Don't lose a good name that only the discarded row had.
+      if (isPlaceholderName(keeper.name, keeper.ipAddress, keeper.vendor)) {
+        const named = group.find(
+          (row) =>
+            row.id !== keeper.id &&
+            !isPlaceholderName(row.name, row.ipAddress, row.vendor),
+        );
+        if (named) keeper.name = named.name;
+      }
+      const newest = group.reduce((a, b) =>
+        (a.lastSeenAt?.getTime() ?? 0) >= (b.lastSeenAt?.getTime() ?? 0) ? a : b,
+      );
+      keeper.macAddress = newest.macAddress ?? keeper.macAddress;
+      keeper.macRandomized = newest.macRandomized;
+      keeper.isOnline = group.some((row) => row.isOnline);
+      await this.devices.save(keeper);
+      for (const row of group) {
+        if (row.id !== keeper.id && !row.profileId) stale.push(row);
+      }
+    }
+    if (stale.length) {
+      await this.devices.remove(stale);
+      this.logger.log(`Device sync: pruned ${stale.length} non-device entries`);
+    }
+
     this.logger.log(
       `Device sync: ${discovered.length} discovered, ${created} new`,
     );
     return { discovered: discovered.length, created };
+  }
+
+  /** Forget a device row; re-created by discovery if it is still active. */
+  async remove(id: string): Promise<void> {
+    const device = await this.findOne(id);
+    const profileId = device.profileId;
+    await this.devices.remove(device);
+    // Its identifiers were part of the profile's appliance policy — re-push.
+    if (profileId) await this.profiles.syncProfile(profileId);
   }
 
   async update(id: string, dto: UpdateDeviceDto): Promise<Device> {
