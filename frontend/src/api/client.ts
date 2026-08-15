@@ -81,6 +81,14 @@ export const api = {
     }),
   report: (id: string) => request<ProfileReport>(`/reports/profile/${id}`),
 
+  // web push
+  pushConfig: () => request<{ enabled: boolean; publicKey: string | null; devices: number }>('/push/config'),
+  pushSubscribe: (body: { endpoint: string; keys: { p256dh: string; auth: string } }) =>
+    request<{ ok: true }>('/push/subscribe', { method: 'POST', body: JSON.stringify(body) }),
+  pushUnsubscribe: (endpoint: string) =>
+    request<{ ok: true }>('/push/subscribe', { method: 'DELETE', body: JSON.stringify({ endpoint }) }),
+  pushTest: () => request<{ delivered: number }>('/push/test', { method: 'POST' }),
+
   // schedules (bedtime / homework windows)
   schedules: (profileId: string) =>
     request<Schedule[]>(`/profiles/${profileId}/schedules`),
