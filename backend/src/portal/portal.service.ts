@@ -9,6 +9,8 @@ export type PortalState = 'on' | 'bedtime' | 'quota' | 'paused' | 'blocked' | 'u
 
 export interface PortalStatus {
   state: PortalState;
+  /** This device's id, when we recognise it — used to scope its own push. */
+  deviceId: string | null;
   deviceName: string | null;
   profileName: string | null;
   /** "06:00" — when the current bedtime window ends, if that's why it's off. */
@@ -34,6 +36,7 @@ export class PortalService {
   async statusForIp(ip: string): Promise<PortalStatus> {
     const unknown: PortalStatus = {
       state: 'unknown',
+      deviceId: null,
       deviceName: null,
       profileName: null,
       until: null,
@@ -45,7 +48,11 @@ export class PortalService {
     const device = await this.devices.findOne({ where: { ipAddress: ip } });
     if (!device) return unknown;
 
-    const base = { deviceName: device.name, until: null as string | null };
+    const base = {
+      deviceId: device.id,
+      deviceName: device.name,
+      until: null as string | null,
+    };
 
     if (device.blocked) {
       return {

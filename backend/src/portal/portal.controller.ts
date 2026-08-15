@@ -70,6 +70,10 @@ function render(s: PortalStatus): string {
 <meta name="color-scheme" content="dark" />
 <!-- Re-check periodically so the page flips to "Internet is on" by itself. -->
 <meta http-equiv="refresh" content="60" />
+<link rel="manifest" href="/kids/manifest.webmanifest" />
+<meta name="theme-color" content="#1b2440" />
+<meta name="mobile-web-app-capable" content="yes" />
+<link rel="apple-touch-icon" href="/kids/icon-192.png" />
 <title>${escapeHtml(s.headline)}</title>
 <style>
   * { box-sizing: border-box; }
@@ -89,6 +93,10 @@ function render(s: PortalStatus): string {
            border-radius: 12px; padding: 12px; margin-bottom: 20px; }
   a.btn { display: block; padding: 14px; border-radius: 12px; background: #4f8cff;
           color: #fff; font-weight: 600; text-decoration: none; }
+  .btn2 { display: block; width: 100%; margin-top: 10px; padding: 14px; border: 0;
+          border-radius: 12px; background: rgba(255,255,255,.10); color: #e7ecf5;
+          font: inherit; font-weight: 600; cursor: pointer; }
+  .btn2[disabled] { opacity: .6; }
   .hint { margin-top: 16px; font-size: 12px; color: #6b7793; }
 </style>
 </head>
@@ -100,8 +108,70 @@ function render(s: PortalStatus): string {
     ${s.deviceName ? `<div class="device">${escapeHtml(s.deviceName)}</div>` : ''}
     ${s.until ? `<div class="until">Back on at <strong>${escapeHtml(s.until)}</strong></div>` : ''}
     ${offline ? '<a class="btn" href="/request">Ask to unblock a site</a>' : '<a class="btn" href="/request">Ask for a site to be unblocked</a>'}
+    <button id="notify" class="btn2" hidden>Tell me before bedtime</button>
+    <div id="notice" class="hint"></div>
     <div class="hint">This page updates by itself.</div>
   </div>
+<script>
+/* Notifications, opted into on the device itself. The page stays useful with
+   this script disabled or unsupported — the button simply never appears. */
+(function () {
+  var btn = document.getElementById('notify');
+  var notice = document.getElementById('notice');
+  var say = function (m) { notice.textContent = m; };
+
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+
+  var b64 = function (s) {
+    var pad = '='.repeat((4 - (s.length % 4)) % 4);
+    var raw = atob((s + pad).replace(/-/g, '+').replace(/_/g, '/'));
+    return Uint8Array.from(raw, function (c) { return c.charCodeAt(0); });
+  };
+
+  fetch('/kids/push-config', { cache: 'no-store' })
+    .then(function (r) { return r.json(); })
+    .then(function (cfg) {
+      if (!cfg.enabled || !cfg.publicKey || !cfg.deviceKnown) return;
+      if (cfg.subscribed && Notification.permission === 'granted') {
+        say('Reminders are on for this device.');
+        return;
+      }
+      btn.hidden = false;
+      btn.addEventListener('click', function () {
+        btn.disabled = true;
+        say('Just a moment…');
+        Notification.requestPermission()
+          .then(function (perm) {
+            if (perm !== 'granted') throw new Error('Notifications are switched off for this app.');
+            return navigator.serviceWorker.register('/kids/sw.js', { scope: '/' });
+          })
+          .then(function (reg) { return navigator.serviceWorker.ready.then(function () { return reg; }); })
+          .then(function (reg) {
+            return reg.pushManager.subscribe({
+              userVisibleOnly: true,
+              applicationServerKey: b64(cfg.publicKey),
+            });
+          })
+          .then(function (sub) {
+            return fetch('/kids/subscribe', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(sub.toJSON()),
+            });
+          })
+          .then(function (r) { return r.json(); })
+          .then(function (out) {
+            if (!out.ok) throw new Error('This device is not set up yet — ask a parent.');
+            btn.hidden = true;
+            say('Done. You will get a warning 10 minutes before bedtime.');
+            return fetch('/kids/test', { method: 'POST' });
+          })
+          .catch(function (e) { btn.disabled = false; say(e.message || 'That did not work. Try again.'); });
+      });
+    })
+    .catch(function () { /* offline or blocked — the page still works */ });
+})();
+</script>
 </body>
 </html>`;
 }

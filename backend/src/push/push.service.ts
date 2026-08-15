@@ -1,7 +1,7 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, IsNull, Repository } from 'typeorm';
 import * as webpush from 'web-push';
 import { PushSubscription } from '../entities/push-subscription.entity';
 
@@ -87,8 +87,58 @@ export class PushService implements OnModuleInit {
    * endpoint must not break the alert path that triggered it.
    */
   async send(payload: { title: string; body: string; url?: string; tag?: string }): Promise<number> {
+    // Parent broadcast: device-scoped rows are excluded, so a child's tablet
+    // never receives household alerts ("bypass attempt on X", "new device
+    // joined") — only messages addressed to it by sendToDevices().
+    return this.deliver(await this.subs.find({ where: { deviceId: IsNull() } }), payload);
+  }
+
+  /** Register a subscription that belongs to one child device. */
+  async subscribeDevice(
+    deviceId: string,
+    sub: { endpoint: string; keys: { p256dh: string; auth: string }; userAgent?: string },
+  ): Promise<void> {
+    const existing = await this.subs.findOne({ where: { endpoint: sub.endpoint } });
+    if (existing) {
+      existing.p256dh = sub.keys.p256dh;
+      existing.auth = sub.keys.auth;
+      existing.deviceId = deviceId;
+      existing.failures = 0;
+      await this.subs.save(existing);
+      return;
+    }
+    await this.subs.save(
+      this.subs.create({
+        endpoint: sub.endpoint,
+        p256dh: sub.keys.p256dh,
+        auth: sub.keys.auth,
+        deviceId,
+        userAgent: sub.userAgent ?? null,
+        failures: 0,
+      }),
+    );
+    this.logger.log('new kid-device push subscription registered');
+  }
+
+  /** Notify specific child devices — nobody else. */
+  async sendToDevices(
+    deviceIds: string[],
+    payload: { title: string; body: string; url?: string; tag?: string },
+  ): Promise<number> {
+    if (!deviceIds.length) return 0;
+    return this.deliver(await this.subs.find({ where: { deviceId: In(deviceIds) } }), payload);
+  }
+
+  /** How many child devices have notifications switched on. */
+  async countForDevice(deviceId: string): Promise<number> {
+    return this.subs.count({ where: { deviceId } });
+  }
+
+  private async deliver(
+    all: PushSubscription[],
+    payload: { title: string; body: string; url?: string; tag?: string },
+  ): Promise<number> {
     if (!this.enabled) return 0;
-    const all = await this.subs.find();
     let delivered = 0;
 
     for (const sub of all) {

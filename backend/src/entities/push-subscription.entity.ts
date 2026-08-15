@@ -34,6 +34,16 @@ export class PushSubscription {
   @Column({ type: 'varchar' })
   auth: string;
 
+  /**
+   * Which child device this subscription belongs to, or NULL for a parent's
+   * dashboard. Parent broadcasts deliberately exclude device-scoped rows: a
+   * child must never receive household alerts, only messages about their own
+   * device.
+   */
+  @Index()
+  @Column({ type: 'uuid', nullable: true })
+  deviceId: string | null;
+
   /** Free-text label so a parent can tell devices apart later. */
   @Column({ type: 'varchar', nullable: true })
   userAgent: string | null;

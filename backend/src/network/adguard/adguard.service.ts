@@ -189,10 +189,29 @@ export class AdguardService implements NetworkProvider {
     const portal = this.config
       .get<string>('PORTAL_HOSTNAME', 'homeguardian.co.za')
       .trim();
+    // A blocked device must still be able to RECEIVE the notification telling
+    // it why it is blocked, and Android delivers web push over a persistent
+    // connection to Google's messaging servers. Block those and the child's app
+    // goes silent exactly when it has something to say.
+    //
+    // This is a real, deliberate hole, so it is kept as small as possible:
+    // named hosts only, no wildcards, and only the two that push actually needs
+    // — mtalk.google.com (the FCM/MCS connection that carries the message) and
+    // fcm.googleapis.com (registration). Neither serves general web content, so
+    // the practical browsing leak is nil; a determined tunnel over FCM is
+    // theoretically possible and is a trade we accept, because a bedtime
+    // warning that never arrives is the worse failure.
+    const pushHosts = this.config
+      .get<string>('PUSH_ALLOW_DOMAINS', 'mtalk.google.com,fcm.googleapis.com')
+      .split(',')
+      .map((h) => h.trim())
+      .filter(Boolean);
+
     const rules: string[] = [];
     for (const id of unique) {
       rules.push(`||*^$client='${id}'`);
       if (portal) rules.push(`@@||${portal}^$client='${id}'`);
+      for (const host of pushHosts) rules.push(`@@||${host}^$client='${id}'`);
     }
     await this.setManagedBucket('__blocked__', rules);
 

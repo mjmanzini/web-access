@@ -7,7 +7,26 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
   // The child-facing request page keeps a short, memorable URL.
-  app.setGlobalPrefix('api', { exclude: ['request', 'status', 'api/status', '/'] });
+  // The child-facing surfaces sit at the root, not under /api: they are pages
+  // and app assets typed or tapped on a kid's device, and a service worker can
+  // only claim a scope at or below its own path. Listed explicitly rather than
+  // by wildcard so nothing else leaks out from behind the prefix.
+  app.setGlobalPrefix('api', {
+    exclude: [
+      'request',
+      'status',
+      'api/status',
+      '/',
+      'kids/manifest.webmanifest',
+      'kids/sw.js',
+      'kids/icon-192.png',
+      'kids/icon-512.png',
+      'kids/icon-maskable-512.png',
+      'kids/push-config',
+      'kids/subscribe',
+      'kids/test',
+    ],
+  });
   app.enableCors({
     origin: (process.env.CORS_ORIGIN ?? '*').split(','),
     credentials: true,

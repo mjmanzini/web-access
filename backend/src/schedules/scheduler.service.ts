@@ -10,6 +10,7 @@ import { ProfilesService } from '../profiles/profiles.service';
 import { DevicesService } from '../devices/devices.service';
 import { ActivityService } from '../activity/activity.service';
 import { SchedulesService } from './schedules.service';
+import { PushService } from '../push/push.service';
 
 /**
  * The enforcement heartbeat. Three timers:
@@ -21,6 +22,9 @@ import { SchedulesService } from './schedules.service';
  * All effects flow through ProfilesService so the network layer stays the single
  * enforcement point.
  */
+/** How long before bedtime the child is warned. */
+const WARN_MINUTES = 10;
+
 @Injectable()
 export class SchedulerService {
   private readonly logger = new Logger(SchedulerService.name);
@@ -31,6 +35,7 @@ export class SchedulerService {
     private profilesService: ProfilesService,
     private devices: DevicesService,
     private activity: ActivityService,
+    private push: PushService,
   ) {}
 
   @Interval(30_000)
@@ -100,6 +105,63 @@ export class SchedulerService {
       await this.profilesService.syncBlockedIdentifiers();
     } catch (e) {
       this.logger.warn(`enforcement reconcile failed: ${(e as Error).message}`);
+    }
+  }
+
+  /** Fired for a given occurrence already, so nobody is warned twice. */
+  private warned = new Set<string>();
+
+  /**
+   * "Bedtime in 10 minutes."
+   *
+   * This runs on its own timer rather than inside the enforce loop for one
+   * reason: it has to reach the device BEFORE the block starts. Once bedtime
+   * begins, the device's DNS is answering 0.0.0.0 for everything, and while the
+   * push endpoints stay allowlisted, a warning that depends on the network
+   * surviving the very event it is warning about is a bad design. Ten minutes
+   * of slack means the notification is long delivered by then.
+   */
+  @Cron(CronExpression.EVERY_MINUTE)
+  async bedtimeWarnings(): Promise<void> {
+    const profiles = await this.profiles.find({
+      relations: { schedules: true, devices: true },
+    });
+    const now = new Date();
+
+    for (const profile of profiles) {
+      if (profile.bedtimeEnabled === false) continue;
+      if (profile.internetSwitch === 'off') continue; // already off; nothing to warn about
+      const deviceIds = (profile.devices ?? []).map((d) => d.id);
+      if (!deviceIds.length) continue;
+
+      for (const s of profile.schedules ?? []) {
+        if (!s.enabled) continue;
+        const mins = SchedulesService.minutesUntilStart(s, now);
+        if (mins === null || mins > WARN_MINUTES || mins <= 0) continue;
+
+        const key = `${s.id}:${now.toISOString().slice(0, 10)}:${s.startTime}`;
+        if (this.warned.has(key)) continue;
+        this.warned.add(key);
+
+        try {
+          const sent = await this.push.sendToDevices(deviceIds, {
+            title: `Bedtime in ${mins} minute${mins === 1 ? '' : 's'}`,
+            body: `The internet switches off at ${s.startTime} until ${s.endTime}. Good time to finish up.`,
+            url: '/status',
+            tag: 'bedtime-warning',
+          });
+          this.logger.log(`bedtime warning for "${profile.name}" → ${sent} device(s)`);
+        } catch (e) {
+          this.logger.warn(`bedtime warning failed: ${(e as Error).message}`);
+        }
+      }
+    }
+
+    // Keep the dedupe set from growing forever; yesterday's keys can never
+    // match again.
+    if (this.warned.size > 200) {
+      const today = now.toISOString().slice(0, 10);
+      for (const k of this.warned) if (!k.includes(today)) this.warned.delete(k);
     }
   }
 

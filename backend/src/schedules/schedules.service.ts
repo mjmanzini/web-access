@@ -54,6 +54,35 @@ export class SchedulesService {
     return at;
   }
 
+  /**
+   * Minutes from `now` until this window next starts, or null if it will not
+   * start within the next 24 hours (wrong day, or already running).
+   *
+   * Used to warn a child before the internet goes off, so the number has to be
+   * the real wait, not "is it bedtime yet".
+   */
+  static minutesUntilStart(schedule: Schedule, now: Date): number | null {
+    if (!schedule.enabled) return null;
+    if (SchedulesService.isActive(schedule, now)) return null; // already inside it
+
+    const [sh, sm] = schedule.startTime.split(':').map(Number);
+    const start = sh * 60 + sm;
+    const cur = now.getHours() * 60 + now.getMinutes();
+
+    // Today if the start is still ahead of us, otherwise tomorrow.
+    const untilToday = start - cur;
+    const minutes = untilToday > 0 ? untilToday : untilToday + 24 * 60;
+
+    // Day filter applies to the day the window STARTS on, which is tomorrow
+    // when we have already passed today's start time.
+    const days = (schedule.daysOfWeek ?? []).map(Number);
+    if (days.length) {
+      const startDay = untilToday > 0 ? now.getDay() : (now.getDay() + 1) % 7;
+      if (!days.includes(startDay)) return null;
+    }
+    return minutes;
+  }
+
   static isActive(schedule: Schedule, now: Date): boolean {
     if (!schedule.enabled) return false;
     const dow = now.getDay();

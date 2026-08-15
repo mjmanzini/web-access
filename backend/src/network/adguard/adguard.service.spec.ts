@@ -110,3 +110,53 @@ describe('AdguardService — concurrent rule writes', () => {
     expect(api.state.rules).toContain('||b.example^');
   });
 });
+
+/**
+ * A blocked device must still receive the notification that explains why it is
+ * blocked. That means the push transport stays reachable while everything else
+ * is answered 0.0.0.0 — and that the hole stays exactly as small as declared.
+ */
+describe('AdguardService — blocked-client rule composition', () => {
+  function harness(env: Record<string, string> = {}) {
+    const state = { rules: [] as string[] };
+    const api = {
+      getUserRules: async () => [...state.rules],
+      setUserRules: async (r: string[]) => { state.rules = [...r]; },
+      getAccessList: async () => ({ allowed_clients: [], disallowed_clients: [], blocked_hosts: [] }),
+      setAccessList: async () => undefined,
+    };
+    const svc = new AdguardService(new ConfigService({ PORTAL_HOSTNAME: 'homeguardian.co.za', ...env }));
+    (svc as unknown as { api: unknown }).api = api;
+    return { svc, state };
+  }
+
+  it('pairs every block with the portal and push exceptions', async () => {
+    const { svc, state } = harness();
+    await svc.setBlockedClientIdentifiers(['192.168.8.112']);
+
+    expect(state.rules).toContain("||*^$client='192.168.8.112'");
+    expect(state.rules).toContain("@@||homeguardian.co.za^$client='192.168.8.112'");
+    expect(state.rules).toContain("@@||mtalk.google.com^$client='192.168.8.112'");
+    expect(state.rules).toContain("@@||fcm.googleapis.com^$client='192.168.8.112'");
+  });
+
+  it('allows nothing beyond the declared hosts — no wildcards, no extras', async () => {
+    const { svc, state } = harness();
+    await svc.setBlockedClientIdentifiers(['192.168.8.112']);
+
+    const allowed = state.rules.filter((r) => r.startsWith('@@'));
+    expect(allowed).toHaveLength(3);
+    // A wildcard here would quietly reopen general browsing.
+    expect(allowed.some((r) => r.includes('*'))).toBe(false);
+    expect(allowed.every((r) => r.includes("$client='192.168.8.112'"))).toBe(true);
+  });
+
+  it('honours PUSH_ALLOW_DOMAINS so the hole can be closed entirely', async () => {
+    const { svc, state } = harness({ PUSH_ALLOW_DOMAINS: '' });
+    await svc.setBlockedClientIdentifiers(['192.168.8.112']);
+
+    expect(state.rules.filter((r) => r.startsWith('@@'))).toEqual([
+      "@@||homeguardian.co.za^$client='192.168.8.112'",
+    ]);
+  });
+});

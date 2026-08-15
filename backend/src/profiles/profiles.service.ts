@@ -16,6 +16,7 @@ import {
 } from '../router/router-provider.interface';
 import { EventsGateway } from '../events/events.gateway';
 import { SchedulesService } from '../schedules/schedules.service';
+import { PushService } from '../push/push.service';
 import { effectiveState } from '../common/effective-state';
 import {
   CreateProfileDto,
@@ -41,6 +42,7 @@ export class ProfilesService {
     @Inject(NETWORK_PROVIDER) private network: NetworkProvider,
     @Inject(ROUTER_PROVIDER) private router: RouterProvider,
     private events: EventsGateway,
+    private push: PushService,
   ) {}
 
   findAll(): Promise<Profile[]> {
@@ -159,6 +161,9 @@ export class ProfilesService {
   }
 
   async setPaused(id: string, dto: PauseProfileDto): Promise<Profile> {
+    // Captured before the write so the child is only notified on a real
+    // transition, not on every reconcile that re-affirms the same state.
+    const wasPaused = (await this.profiles.findOne({ where: { id } }))?.internetPaused ?? false;
     await this.profiles.update(id, {
       internetPaused: dto.paused,
       pausedReason: dto.paused ? (dto.reason ?? 'manual') : null,
@@ -187,7 +192,60 @@ export class ProfilesService {
         at: new Date().toISOString(),
       });
     }
+
+    // Tell the child's own device, in its own words. Parents get the alert
+    // above; the kid gets a plain explanation on the device that just stopped
+    // working. Only on a real transition, so nobody is buzzed every minute.
+    if (dto.paused !== wasPaused) {
+      await this.notifyChildDevices(profile, dto.paused ? (dto.reason ?? 'manual') : null);
+    }
     return profile;
+  }
+
+  /**
+   * Push to the child's devices. Never throws: a notification failing must not
+   * break the enforcement that triggered it.
+   */
+  private async notifyChildDevices(profile: Profile, reason: string | null): Promise<void> {
+    const deviceIds = (profile.devices ?? []).map((d) => d.id);
+    if (!deviceIds.length) return;
+
+    let title: string;
+    let body: string;
+    if (reason === null) {
+      title = 'Internet is back on';
+      body = 'You’re good to go.';
+    } else if (reason === 'bedtime') {
+      const until = this.currentBedtimeEnd(profile);
+      title = 'Bedtime — internet off';
+      body = until
+        ? `The internet is off until ${until}. It will switch back on by itself.`
+        : 'The internet is off for bedtime. It will switch back on by itself.';
+    } else if (reason === 'quota_exceeded') {
+      title = 'Screen time is used up';
+      body = 'That’s all of today’s internet time. It resets tomorrow morning.';
+    } else {
+      title = 'A parent paused the internet';
+      body = 'It will come back when they turn it on again.';
+    }
+
+    try {
+      await this.push.sendToDevices(deviceIds, {
+        title,
+        body,
+        url: '/status',
+        tag: 'kids-state',
+      });
+    } catch (err) {
+      this.logger.warn(`kid notification failed: ${(err as Error).message}`);
+    }
+  }
+
+  private currentBedtimeEnd(profile: Profile): string | null {
+    const now = new Date();
+    return (
+      (profile.schedules ?? []).find((s) => SchedulesService.isActive(s, now))?.endTime ?? null
+    );
   }
 
   /** Grant extra minutes for today and lift a quota-based pause if present. */

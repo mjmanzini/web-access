@@ -86,6 +86,9 @@ services:
       # an explicit allow rule for it, so a child can always see WHY their
       # device is offline.
       PORTAL_HOSTNAME: ${PORTAL_HOSTNAME:-}
+      # Hosts a blocked device may still resolve, so the kid app can still be
+      # told why it is blocked. Empty closes the hole (and the notifications).
+      PUSH_ALLOW_DOMAINS: ${PUSH_ALLOW_DOMAINS:-mtalk.google.com,fcm.googleapis.com}
       # Bedtime windows and the weekly digest are wall-clock: a parent setting
       # "20:30" means 20:30 where they live. Containers default to UTC, which
       # silently shifts every schedule by the local offset.
