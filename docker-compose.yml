@@ -77,6 +77,10 @@ services:
       HUAWEI_PASSWORD: ${HUAWEI_PASSWORD:-}
       CORS_ORIGIN: ${CORS_ORIGIN:-*}
       ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+      # Web Push. Blank disables push cleanly; the dashboard hides the toggle.
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:admin@example.com}
       # Hostname the kids' status/request pages are reached on over the LAN (an
       # AdGuard DNS rewrite should point it at this host). Blocked devices keep
       # an explicit allow rule for it, so a child can always see WHY their
