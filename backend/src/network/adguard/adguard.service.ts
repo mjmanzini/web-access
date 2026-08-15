@@ -28,7 +28,7 @@ export class AdguardService implements NetworkProvider {
   /** Marker so we only ever manage our own rules inside AdGuard's user_rules. */
   private static readonly MANAGED_TAG = '# home-guardian:managed';
 
-  constructor(config: ConfigService) {
+  constructor(private readonly config: ConfigService) {
     this.api = new AdguardApiClient({
       baseUrl: config.get<string>('ADGUARD_URL', 'http://adguardhome:80'),
       username: config.get<string>('ADGUARD_USERNAME', 'admin'),
@@ -182,10 +182,19 @@ export class AdguardService implements NetworkProvider {
    */
   async setBlockedClientIdentifiers(identifiers: string[]): Promise<void> {
     const unique = [...new Set(identifiers)];
-    await this.setManagedBucket(
-      '__blocked__',
-      unique.map((id) => `||*^$client='${id}'`),
-    );
+    // The child's own status page ("why isn't my tablet working?") lives on the
+    // local portal host. A catch-all block would take that page down for
+    // exactly the devices that need it, so every blocked client keeps an
+    // explicit exception for it. @@ rules win over blocks in AdGuard.
+    const portal = this.config
+      .get<string>('PORTAL_HOSTNAME', 'homeguardian.co.za')
+      .trim();
+    const rules: string[] = [];
+    for (const id of unique) {
+      rules.push(`||*^$client='${id}'`);
+      if (portal) rules.push(`@@||${portal}^$client='${id}'`);
+    }
+    await this.setManagedBucket('__blocked__', rules);
 
     // Retire any access-list entries a previous version left behind, so the
     // refuse-to-serve path can't reintroduce the failover it caused.
