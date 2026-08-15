@@ -62,7 +62,26 @@ export class ProfilesService {
       blockedCategories: dto.blockedCategories ?? [],
     });
     const saved = await this.profiles.save(profile);
-    await this.syncProfile(saved.id);
+    // The profile row is already committed by this point, so letting an
+    // appliance error escape would answer 500 to a request that DID create the
+    // profile: the parent sees a failure, taps Add again, and ends up with
+    // duplicates. Report the profile, and raise the enforcement failure as an
+    // alert rather than hiding it — the next enforce tick reconciles.
+    try {
+      await this.syncProfile(saved.id);
+    } catch (err) {
+      const detail = (err as Error).message;
+      this.logger.warn(`profile "${saved.name}" created, policy push failed: ${detail}`);
+      this.events.emitAlert({
+        type: 'system_down',
+        severity: 'warning',
+        message:
+          `Profile "${saved.name}" was created, but its filtering rules could not be ` +
+          `applied yet (${detail}). It will retry automatically.`,
+        profileId: saved.id,
+        at: new Date().toISOString(),
+      });
+    }
     return saved;
   }
 

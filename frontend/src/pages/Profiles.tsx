@@ -8,59 +8,70 @@ export default function Profiles() {
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [name, setName] = useState('');
   const [report, setReport] = useState<{ id: string; data: ProfileReport } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const load = () => {
-    api.profiles().then(setProfiles).catch(() => {});
+    api.profiles().then(setProfiles).catch((e) => setError(e.message));
   };
   useEffect(load, []);
 
-  const anyPaused = profiles.some((p) => p.internetPaused);
-  const togglePauseAll = async () => {
-    await api.pauseAll(!anyPaused);
-    load();
-  };
-  const bonus = async (p: Profile, minutes: number) => {
-    await api.bonusTime(p.id, minutes);
-    load();
-  };
-  const showReport = async (id: string) => {
-    if (report?.id === id) return setReport(null);
-    setReport({ id, data: await api.report(id) });
+  /**
+   * Every control on this page is a write that can fail. Before this, each
+   * handler awaited the API with no catch: a rejected request vanished into an
+   * unhandled promise and the button simply did nothing — no spinner, no error,
+   * nothing to tell a parent whether the thing they just tapped worked. Route
+   * every mutation through here so a failure is always visible and a slow
+   * request always looks slow.
+   */
+  const run = async (fn: () => Promise<unknown>) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await fn();
+      load();
+    } catch (e) {
+      setError((e as Error).message || 'Something went wrong. Please try again.');
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const create = async () => {
-    if (!name.trim()) return;
-    await api.createProfile({ name: name.trim(), blockedCategories: ['adult'] });
-    setName('');
-    load();
+  const anyPaused = profiles.some((p) => p.internetPaused);
+  const togglePauseAll = () => run(() => api.pauseAll(!anyPaused));
+  const bonus = (p: Profile, minutes: number) => run(() => api.bonusTime(p.id, minutes));
+  const showReport = (id: string) => {
+    if (report?.id === id) return setReport(null);
+    return run(async () => setReport({ id, data: await api.report(id) }));
   };
-  const togglePause = async (p: Profile) => {
-    await api.pauseProfile(p.id, !p.internetPaused);
-    load();
-  };
+
+  const create = () =>
+    run(async () => {
+      // An empty name used to return silently, which looks exactly like a
+      // broken button — say what is missing instead.
+      if (!name.trim()) throw new Error('Enter a name for the profile first.');
+      await api.createProfile({ name: name.trim(), blockedCategories: ['adult'] });
+      setName('');
+    });
+  const togglePause = (p: Profile) => run(() => api.pauseProfile(p.id, !p.internetPaused));
 
   /** The two independent inputs. Each just sets a field; the backend
       recomputes the effective state and pushes enforcement immediately. */
-  const setSwitch = async (p: Profile, internetSwitch: 'auto' | 'off') => {
-    await api.updateProfile(p.id, { internetSwitch });
-    load();
-  };
-  const setBedtime = async (p: Profile, bedtimeEnabled: boolean) => {
-    await api.updateProfile(p.id, { bedtimeEnabled });
-    load();
-  };
-  const toggleCategory = async (p: Profile, cat: string) => {
+  const setSwitch = (p: Profile, internetSwitch: 'auto' | 'off') =>
+    run(() => api.updateProfile(p.id, { internetSwitch }));
+  const setBedtime = (p: Profile, bedtimeEnabled: boolean) =>
+    run(() => api.updateProfile(p.id, { bedtimeEnabled }));
+  const toggleCategory = (p: Profile, cat: string) => {
     const set = new Set(p.blockedCategories);
     set.has(cat) ? set.delete(cat) : set.add(cat);
-    await api.updateProfile(p.id, { blockedCategories: [...set] });
-    load();
+    return run(() => api.updateProfile(p.id, { blockedCategories: [...set] }));
   };
-  const setLimit = async (p: Profile, minutes: string) => {
-    await api.updateProfile(p.id, {
-      dailyTimeLimitMinutes: minutes ? Number(minutes) : null,
-    });
-    load();
-  };
+  const setLimit = (p: Profile, minutes: string) =>
+    run(() =>
+      api.updateProfile(p.id, {
+        dailyTimeLimitMinutes: minutes ? Number(minutes) : null,
+      }),
+    );
 
   return (
     <>
@@ -68,14 +79,57 @@ export default function Profiles() {
         <h1>Profiles</h1>
         <div className="row">
           {profiles.length > 0 && (
-            <button className={anyPaused ? 'ghost' : 'danger'} onClick={togglePauseAll}>
+            <button
+              className={anyPaused ? 'ghost' : 'danger'}
+              onClick={togglePauseAll}
+              disabled={busy}
+            >
               {anyPaused ? 'Resume all' : 'Pause all'}
             </button>
           )}
-          <input placeholder="New profile (e.g. Sam)" value={name} onChange={(e) => setName(e.target.value)} />
-          <button onClick={create}>Add</button>
+          {/* A real form, so the phone keyboard's "Go" key submits it. As a
+              bare input + button, Enter did nothing and the only way to add a
+              profile was to dismiss the keyboard and find the button. */}
+          <form
+            className="row"
+            style={{ flex: '1 1 220px', minWidth: 0 }}
+            onSubmit={(e) => {
+              e.preventDefault();
+              create();
+            }}
+          >
+            <input
+              placeholder="New profile (e.g. Sam)"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              // Without a flex basis the input keeps its intrinsic ~200px and
+              // pushes Add off the row on a narrow screen.
+              style={{ flex: '1 1 120px', minWidth: 0 }}
+              enterKeyHint="done"
+              autoCapitalize="words"
+              autoCorrect="off"
+            />
+            <button type="submit" disabled={busy}>
+              {busy ? 'Adding…' : 'Add'}
+            </button>
+          </form>
         </div>
       </div>
+
+      {error && (
+        <div
+          className="card"
+          role="alert"
+          style={{ borderColor: 'var(--danger)', color: 'var(--danger)', marginBottom: 16 }}
+        >
+          <div className="row" style={{ justifyContent: 'space-between', gap: 8 }}>
+            <span>{error}</span>
+            <button className="ghost" onClick={() => setError(null)}>
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(300px,1fr))' }}>
         {profiles.map((p) => (
