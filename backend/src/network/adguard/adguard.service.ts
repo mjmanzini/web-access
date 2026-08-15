@@ -165,12 +165,37 @@ export class AdguardService implements NetworkProvider {
     await this.setManagedBucket('__global__', rules);
   }
 
+  /**
+   * Cut a set of clients off, by ANSWERING every query with a block rather than
+   * refusing to serve them.
+   *
+   * The obvious implementation — AdGuard's access list (`disallowed_clients`) —
+   * is actively harmful whenever a secondary DNS server is handed out: AdGuard
+   * drops/refuses the query, the client treats that as "this resolver is down",
+   * fails over to the secondary (typically the router), and resolves everything
+   * unfiltered. Bedtime then appears to do nothing. Android is especially quick
+   * to fail over because it queries configured resolvers in parallel.
+   *
+   * A client-scoped catch-all filter rule keeps the client talking to AdGuard —
+   * it gets a prompt 0.0.0.0 for every name, so there is no failure to fail over
+   * from, and the block actually holds.
+   */
   async setBlockedClientIdentifiers(identifiers: string[]): Promise<void> {
+    const unique = [...new Set(identifiers)];
+    await this.setManagedBucket(
+      '__blocked__',
+      unique.map((id) => `||*^$client='${id}'`),
+    );
+
+    // Retire any access-list entries a previous version left behind, so the
+    // refuse-to-serve path can't reintroduce the failover it caused.
     const list = await this.api.getAccessList();
-    await this.api.setAccessList({
-      ...list,
-      disallowed_clients: [...new Set(identifiers)],
-    });
+    if (list.disallowed_clients.length) {
+      await this.api.setAccessList({ ...list, disallowed_clients: [] });
+      this.logger.log(
+        `Cleared ${list.disallowed_clients.length} access-list entr(ies); blocking now uses client-scoped rules`,
+      );
+    }
   }
 
   async fetchQueryLog(limit: number): Promise<NetworkQueryLogEntry[]> {
