@@ -29,6 +29,8 @@ export default function Devices() {
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [showOffline, setShowOffline] = useState(false);
+  const [pending, setPending] = useState<Set<string>>(new Set());
+  const [error, setError] = useState('');
   const navigate = useNavigate();
 
   const load = () => {
@@ -60,9 +62,33 @@ export default function Devices() {
     await api.updateDevice(id, { profileId: profileId || null });
     load();
   };
+  /**
+   * Pause/resume with visible state. Without this the button looked inert on a
+   * phone: the request is fired, nothing changes until the next poll, and a
+   * failure (expired session, API unreachable) is swallowed entirely — so a tap
+   * that never reached the backend is indistinguishable from one that worked.
+   */
   const toggleBlock = async (d: Device) => {
-    await api.updateDevice(d.id, { blocked: !d.blocked });
-    load();
+    setPending((prev) => new Set(prev).add(d.id));
+    setError('');
+    try {
+      const updated = await api.updateDevice(d.id, { blocked: !d.blocked });
+      // Reflect the server's answer immediately rather than waiting for a poll.
+      setDevices((prev) => prev.map((x) => (x.id === d.id ? { ...x, blocked: updated.blocked } : x)));
+      load();
+    } catch (e) {
+      setError(
+        `Could not ${d.blocked ? 'resume' : 'pause'} ${d.name}: ${
+          e instanceof Error ? e.message : 'request failed'
+        }`,
+      );
+    } finally {
+      setPending((prev) => {
+        const next = new Set(prev);
+        next.delete(d.id);
+        return next;
+      });
+    }
   };
   const startRename = (d: Device) => {
     setEditing(d.id);
@@ -113,6 +139,8 @@ export default function Devices() {
           <button onClick={sync} disabled={busy}>{busy ? 'Scanning…' : 'Scan network'}</button>
         </div>
       </div>
+
+      {error && <div className="badge danger" style={{ marginBottom: 12, display: "block" }}>{error}</div>}
 
       <div className="card">
         <table>
@@ -202,6 +230,7 @@ export default function Devices() {
                     <button className="ghost" onClick={() => forget(d)} title="Remove this entry">Forget</button>
                     <button
                       className={d.blocked ? '' : 'danger'}
+                      disabled={pending.has(d.id)}
                       onClick={() => toggleBlock(d)}
                       title={
                         d.blocked
@@ -209,7 +238,7 @@ export default function Devices() {
                           : 'Cut this device off now — dinner, homework, bedtime'
                       }
                     >
-                      {d.blocked ? 'Resume internet' : 'Pause internet'}
+                      {pending.has(d.id) ? '…' : d.blocked ? 'Resume internet' : 'Pause internet'}
                     </button>
                   </td>
                 </tr>
