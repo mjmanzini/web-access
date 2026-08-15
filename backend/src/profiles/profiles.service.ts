@@ -197,7 +197,14 @@ export class ProfilesService {
     const ids: string[] = [];
     for (const d of devices) {
       if (d.clientId) ids.push(d.clientId); // durable anchor
-      if (d.macAddress && !d.macRandomized) ids.push(d.macAddress);
+      // NOTE: no MAC here. AdGuard's *client* definitions accept a MAC, but its
+      // access list (which is what enforces a block) accepts only an IP, a CIDR
+      // or a ClientID — a MAC makes the whole request fail with
+      //   400 "bad ip, cidr, or ClientID"
+      // and then NOTHING is blocked. That failure only appears once devices
+      // have MACs at all, i.e. after a router provider is enabled, so pause and
+      // bedtime silently stop working the moment the router integration lands.
+      // The MAC is still used for router-level enforcement (setBlockedMacs).
       if (d.ipAddress) ids.push(d.ipAddress);
     }
     return [...new Set(ids)];
