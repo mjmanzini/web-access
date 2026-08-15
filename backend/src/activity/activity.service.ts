@@ -80,10 +80,30 @@ export class ActivityService {
       row.domain === FIREFOX_DOH_CANARY;
 
     if (isBypass) {
+      // Not every DoH/DoT lookup is a child evading anything:
+      //
+      //  - Android probes dns.google constantly for its Private DNS feature,
+      //    and Firefox queries the canary domain on every start. Those are OS
+      //    behaviour, and alerting on them trains a parent to ignore alerts.
+      //  - If our anti-bypass rules already blocked it, containment worked —
+      //    that is a success, not an incident.
+      //  - On a device that belongs to no profile (a parent's own phone) there
+      //    is nothing to evade in the first place.
+      //
+      // What is worth interrupting someone for: a *managed* device that
+      // successfully reached a private resolver, i.e. it now has a way to
+      // resolve around us.
+      const isCanary = row.domain === FIREFOX_DOH_CANARY;
+      const wasContained = row.action === 'blocked';
+      const isManaged = !!device?.profileId;
+      if (isCanary || wasContained || !isManaged) return;
+
       this.events.emitAlert({
         type: 'bypass_attempt',
-        severity: 'critical',
-        message: `${device?.name ?? row.clientIp} tried to reach a DNS-bypass resolver (${row.domain}).`,
+        severity: 'warning',
+        message:
+          `${device?.name ?? row.clientIp} reached a private DNS resolver (${row.domain}) that was NOT blocked — ` +
+          `it may be able to resolve around Home Guardian. Check the device's Private DNS setting.`,
         deviceId: device?.id ?? null,
         profileId: device?.profileId ?? null,
         domain: row.domain,
