@@ -145,16 +145,30 @@ export class ProfilesService {
       pausedReason: dto.paused ? (dto.reason ?? 'manual') : null,
     });
     await this.syncBlockedIdentifiers();
+
+    const profile = await this.findOne(id);
     if (dto.paused) {
+      // Alerts are read by a person on a phone: name the child and the devices
+      // affected. A UUID here tells the reader nothing about whose internet
+      // just stopped.
+      const devices = (profile.devices ?? []).map((d) => d.name).join(', ');
+      const on = devices ? ` (${devices})` : '';
+      const message =
+        dto.reason === 'quota_exceeded'
+          ? `Daily limit reached — ${profile.name} paused${on}.`
+          : dto.reason === 'bedtime'
+            ? `Bedtime started — ${profile.name} paused${on}.`
+            : `${profile.name} switched off${on}.`;
+
       this.events.emitAlert({
         type: dto.reason === 'quota_exceeded' ? 'quota_exceeded' : 'bedtime_pause',
         severity: 'info',
-        message: `Internet paused for profile ${id} (${dto.reason ?? 'manual'})`,
+        message,
         profileId: id,
         at: new Date().toISOString(),
       });
     }
-    return this.findOne(id);
+    return profile;
   }
 
   /** Grant extra minutes for today and lift a quota-based pause if present. */
