@@ -77,6 +77,11 @@ services:
       HUAWEI_PASSWORD: ${HUAWEI_PASSWORD:-}
       CORS_ORIGIN: ${CORS_ORIGIN:-*}
       ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+      # Bedtime windows and the weekly digest are wall-clock: a parent setting
+      # "20:30" means 20:30 where they live. Containers default to UTC, which
+      # silently shifts every schedule by the local offset — set this to your
+      # zone (e.g. Africa/Johannesburg) or bedtime will fire at the wrong hour.
+      TZ: ${TZ:-UTC}
     ports:
       - "3001:3001"
 
