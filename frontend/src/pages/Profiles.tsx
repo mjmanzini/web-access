@@ -9,6 +9,7 @@ export default function Profiles() {
   const [name, setName] = useState('');
   const [report, setReport] = useState<{ id: string; data: ProfileReport } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [loadingReport, setLoadingReport] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = () => {
@@ -204,7 +205,11 @@ export default function Profiles() {
                 <button className="ghost" style={{ padding: '4px 10px' }} onClick={() => bonus(p, 30)}>+30m</button>
               </div>
               <button className="ghost" style={{ padding: '4px 10px' }} onClick={() => showReport(p.id)}>
-                {report?.id === p.id ? 'Hide report' : 'Report'}
+                {loadingReport === p.id
+                  ? 'Loading…'
+                  : report?.id === p.id
+                    ? 'Hide report'
+                    : 'Report'}
               </button>
             </div>
 
@@ -387,10 +392,32 @@ function ReportPanel({ data }: { data: ProfileReport }) {
   const maxMin = Math.max(60, ...data.last7Days.map((d) => d.usedMinutes));
   return (
     <div style={{ marginTop: 12, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+      {/* Headline numbers first. The report used to open on a one-bar sparkline
+          and "No history yet", which reads as a button that did nothing. */}
+      <div className="cards" style={{ gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 10 }}>
+        <div>
+          <div className="stat" style={{ fontSize: 22 }}>{data.today.usedMinutes}m</div>
+          <div className="muted" style={{ fontSize: 11 }}>
+            online today
+            {data.today.limitMinutes ? ` / ${data.today.limitMinutes}m` : ''}
+            {data.today.bonusMinutes ? ` (+${data.today.bonusMinutes})` : ''}
+          </div>
+        </div>
+        <div>
+          <div className="stat" style={{ fontSize: 22 }}>
+            {(data.deviceTotals?.lookupsToday ?? 0).toLocaleString()}
+          </div>
+          <div className="muted" style={{ fontSize: 11 }}>requests today</div>
+        </div>
+        <div>
+          <div className="stat" style={{ fontSize: 22, color: 'var(--danger)' }}>
+            {(data.deviceTotals?.blockedToday ?? 0).toLocaleString()}
+          </div>
+          <div className="muted" style={{ fontSize: 11 }}>blocked today</div>
+        </div>
+      </div>
       <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
-        Today {data.today.usedMinutes}m
-        {data.today.limitMinutes ? ` / ${data.today.limitMinutes}m` : ''}
-        {data.today.bonusMinutes ? ` (+${data.today.bonusMinutes} bonus)` : ''}
+        Last 7 days
       </div>
       {/* simple 7-day bar sparkline */}
       <div className="row" style={{ alignItems: 'flex-end', gap: 4, height: 48 }}>
