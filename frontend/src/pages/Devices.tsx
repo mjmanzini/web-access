@@ -322,6 +322,13 @@ export default function Devices() {
                     </button>
                     <button className="ghost" onClick={() => startRename(d)}>Rename</button>
                     <button className="ghost" onClick={() => showSetup(d.id)}>DNS setup</button>
+                    {/* Also offered under the device name. Duplicated on
+                        purpose: this column is where a parent actually
+                        operates, and on a phone the two are never on screen
+                        together — the table scrolls sideways between them. */}
+                    <button className="ghost" onClick={() => showPair(d)}>
+                      {pair?.id === d.id ? 'Hide pairing' : '📱 Pair kid app'}
+                    </button>
                     <button className="ghost" onClick={() => forget(d)} title="Remove this entry">Forget</button>
                     {/* When the profile is what's blocking, offer the action
                         that actually works. */}

@@ -23,6 +23,13 @@ self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE));
 });
 
+// The page asks the waiting worker to take over as soon as a new build is
+// installed, so an update lands on the next launch instead of whenever the
+// browser feels like it.
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting();
+});
+
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches
