@@ -15,6 +15,8 @@ async function bootstrap() {
     exclude: [
       'request',
       'pair',
+      'pair/confirm',
+      'status/stream',
       'status',
       'api/status',
       '/',

@@ -86,6 +86,11 @@ export class DeviceIdentityService {
 
   // ---- pairing ----
 
+  /** Look up a device by id — used to name it before pairing commits. */
+  deviceById(id: string): Promise<Device | null> {
+    return this.devices.findOne({ where: { id } });
+  }
+
   /** A short-lived token a parent turns into a link for the child's device. */
   issuePairToken(deviceId: string): string {
     const expires = Date.now() + PAIR_TOKEN_TTL_MS;

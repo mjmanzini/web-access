@@ -440,12 +440,21 @@ function PairPanel({
 
   return (
     <div className="grid pair-panel" style={{ gap: 10, padding: '6px 0' }}>
-      <div style={{ fontSize: 13 }}>
-        <strong>Set up the kid app on {pair.name}</strong>
+      {/* The name goes first and goes big. A parent generates this from one row
+          and scans it on a different device, so the two can drift apart — that
+          happened once and a tablet was paired as the laptop, with nothing on
+          screen to catch it. */}
+      <div className="muted" style={{ fontSize: 12 }}>You are pairing</div>
+      <div style={{ fontSize: 20, fontWeight: 700, lineHeight: 1.2, overflowWrap: 'anywhere' }}>
+        {pair.name}
+      </div>
+      <div className="muted" style={{ fontSize: 12 }}>
+        Scan this on <strong>{pair.name}</strong> itself — the device will ask you
+        to confirm that name before anything is saved.
       </div>
       <ol className="muted" style={{ fontSize: 12, margin: 0, paddingLeft: 18, lineHeight: 1.7 }}>
         <li>On {pair.name}, open Chrome and scan this code (or paste the link).</li>
-        <li>The page should then show <em>{pair.name}</em> — that means it worked.</li>
+        <li>Confirm the name it shows is <em>{pair.name}</em>, then tap yes.</li>
         <li>Chrome menu ⋮ → <strong>Add to Home screen</strong> → Install.</li>
         <li>Open the app → <strong>Tell me before bedtime</strong> → allow notifications.</li>
       </ol>
