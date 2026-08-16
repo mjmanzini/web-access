@@ -36,6 +36,21 @@ export class RateLimiter {
     return true;
   }
 
+  /**
+   * Forget a key entirely. Used when an attempt succeeds: a correct password
+   * must not leave the account part-way to a lockout, or a person who fumbles
+   * their password twice a day would eventually lock themselves out.
+   */
+  reset(key: string): void {
+    this.hits.delete(key);
+  }
+
+  /** How many hits are currently counted against a key. */
+  count(key: string): number {
+    const now = Date.now();
+    return (this.hits.get(key) ?? []).filter((t) => now - t < this.windowMs).length;
+  }
+
   /** Seconds until the key's oldest recorded hit falls out of the window. */
   retryAfterSeconds(key: string): number {
     const times = this.hits.get(key) ?? [];

@@ -1,7 +1,7 @@
-import { Body, Controller, Get, Post, Req } from '@nestjs/common';
+import { Body, Controller, Get, Post, Req, Res } from '@nestjs/common';
 import { IsEmail, IsString, MinLength } from 'class-validator';
-import { Request } from 'express';
-import { AuthService } from './auth.service';
+import { Request, Response } from 'express';
+import { AuthService, TooManyRequestsException } from './auth.service';
 import { Public } from './public.decorator';
 
 class LoginDto {
@@ -40,8 +40,20 @@ export class AuthController {
 
   @Public()
   @Post('login')
-  login(@Body() dto: LoginDto) {
-    return this.auth.login(dto.username, dto.password);
+  async login(
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+    @Body() dto: LoginDto,
+  ) {
+    try {
+      return await this.auth.login(dto.username, dto.password, clientIp(req));
+    } catch (e) {
+      // A 429 is only useful if the client is told how long to wait.
+      if (e instanceof TooManyRequestsException) {
+        res.setHeader('Retry-After', String(e.retryAfterSeconds));
+      }
+      throw e;
+    }
   }
 
   /**

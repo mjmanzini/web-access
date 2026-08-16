@@ -1,5 +1,7 @@
 import {
   BadRequestException,
+  HttpException,
+  HttpStatus,
   Injectable,
   Logger,
   NotFoundException,
@@ -15,15 +17,55 @@ import { createHash, randomBytes } from 'node:crypto';
 import { AdminUser } from '../entities/admin-user.entity';
 import { AuthCodesService } from './auth-codes.service';
 import { MailerService } from './mailer.service';
+import { RateLimiter } from '../common/rate-limit.util';
 
 /** How long an invite / reset link stays usable. */
 const INVITE_TTL_MS = 7 * 24 * 60 * 60_000;
+
+/**
+ * Failed logins tolerated before a pause. Generous enough that a parent
+ * mistyping on a phone keyboard never notices; tight enough that guessing is
+ * hopeless — five tries per quarter hour is a few hundred a day against one
+ * account, versus a password space that should be astronomically larger.
+ */
+const LOGIN_MAX_PER_ACCOUNT = 5;
+const LOGIN_WINDOW_MS = 15 * 60_000;
+/** One host trying many usernames — the spraying ceiling. */
+const LOGIN_MAX_PER_IP = 30;
+
+/**
+ * A real bcrypt hash of a value nobody knows. Compared against when the
+ * username does not exist, so an unknown name costs the same time as a known
+ * one — otherwise response timing alone tells them apart.
+ */
+const DUMMY_HASH = '$2a$12$C6UzMDM.H6dfI/f/IKcEeO3nX8Zt0Vd1Xz2Q0kQ1e0jVQ9Xzq2W5K';
+
+/** 429 carrying the wait, so the controller can set Retry-After. */
+export class TooManyRequestsException extends HttpException {
+  constructor(readonly retryAfterSeconds: number) {
+    super(
+      {
+        statusCode: HttpStatus.TOO_MANY_REQUESTS,
+        message: `Too many sign-in attempts. Try again in ${Math.ceil(
+          retryAfterSeconds / 60,
+        )} minute(s).`,
+        retryAfterSeconds,
+      },
+      HttpStatus.TOO_MANY_REQUESTS,
+    );
+  }
+}
 
 const sha256 = (v: string) => createHash('sha256').update(v).digest('hex');
 
 @Injectable()
 export class AuthService implements OnModuleInit {
   private readonly logger = new Logger(AuthService.name);
+
+  // Static so the ceilings survive request scope; process-local by design, in
+  // keeping with the rest of this app's limiters.
+  private static readonly loginPerAccount = new RateLimiter(LOGIN_MAX_PER_ACCOUNT, LOGIN_WINDOW_MS);
+  private static readonly loginPerIp = new RateLimiter(LOGIN_MAX_PER_IP, LOGIN_WINDOW_MS);
 
   constructor(
     @InjectRepository(AdminUser) private users: Repository<AdminUser>,
@@ -58,13 +100,58 @@ export class AuthService implements OnModuleInit {
     this.logger.log(`Seeded initial admin user "${username}"`);
   }
 
-  async login(username: string, password: string): Promise<{ token: string }> {
-    const user = await this.users.findOne({ where: { username } });
+  /**
+   * Sign in, with the throttling that Cloudflare Access has been quietly
+   * providing until now.
+   *
+   * Two independent ceilings, because the two attacks look nothing alike:
+   *  - per USERNAME, which stops a targeted grind against one account even when
+   *    it arrives from a hundred addresses;
+   *  - per IP, which stops one host spraying one password across every username
+   *    it can think of.
+   *
+   * Keyed on the SUBMITTED username, never on a resolved account, so an
+   * attacker cannot tell a real account from a fictional one by whether they
+   * get locked out. Only failures accumulate — a correct password clears the
+   * count, so ordinary fumbling never builds toward a lockout.
+   */
+  async login(
+    username: string,
+    password: string,
+    ip: string | null = null,
+  ): Promise<{ token: string }> {
+    const key = (username ?? '').trim().toLowerCase();
+
+    const accountWait = AuthService.loginPerAccount.count(key) >= LOGIN_MAX_PER_ACCOUNT
+      ? AuthService.loginPerAccount.retryAfterSeconds(key)
+      : 0;
+    const ipWait = ip && AuthService.loginPerIp.count(ip) >= LOGIN_MAX_PER_IP
+      ? AuthService.loginPerIp.retryAfterSeconds(ip)
+      : 0;
+    const wait = Math.max(accountWait, ipWait);
+    if (wait > 0) {
+      this.logger.warn(`login throttled for "${key}"${ip ? ` from ${ip}` : ''}`);
+      throw new TooManyRequestsException(wait);
+    }
+
+    // Record the attempt against both ceilings before evaluating it.
+    AuthService.loginPerAccount.allow(key);
+    if (ip) AuthService.loginPerIp.allow(ip);
+
+    const user = await this.users.findOne({ where: { username: key } });
     // An invited account has no hash yet: it must go through its invite link,
-    // never a password guess.
-    const ok =
-      user && user.passwordHash && (await bcrypt.compare(password, user.passwordHash));
+    // never a password guess. Compare against a dummy hash when there is no
+    // user so an unknown username costs the same time as a known one — without
+    // this, response timing alone distinguishes the two.
+    const hash = user?.passwordHash ?? DUMMY_HASH;
+    const matches = await bcrypt.compare(password ?? '', hash);
+    const ok = !!user && !!user.passwordHash && matches;
+
     if (!ok) throw new UnauthorizedException('Invalid credentials');
+
+    // Success clears this account's count; the IP's count stands, so a host
+    // grinding many accounts cannot launder its record with one good login.
+    AuthService.loginPerAccount.reset(key);
     return { token: await this.signFor(user!) };
   }
 

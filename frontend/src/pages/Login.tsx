@@ -25,8 +25,12 @@ export default function Login() {
     try {
       const { token } = await api.login(username, password);
       auth.set(token); // flips the app into the authed view
-    } catch {
-      setError('Invalid username or password.');
+    } catch (e) {
+      // A wrong password stays vague on purpose, but a lockout has to say so —
+      // otherwise someone who is locked out keeps trying, keeps extending it,
+      // and the page keeps insisting their password is wrong.
+      const message = (e as Error)?.message ?? '';
+      setError(/too many/i.test(message) ? message : 'Invalid username or password.');
     } finally {
       setBusy(false);
     }
