@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api/client';
 import type { ActivityLog, Device, Profile, RouterStatus, SystemHealth } from '../api/types';
+import { ErrorNotice, Skeleton } from '../components/ui';
 
 export default function Dashboard() {
   const [devices, setDevices] = useState<Device[]>([]);
@@ -11,17 +12,42 @@ export default function Dashboard() {
   const [router, setRouter] = useState<RouterStatus>();
   const [health, setHealth] = useState<SystemHealth>();
   const [containing, setContaining] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
+  // Router status renders its own 'not configured' state; a failure here is
+  // information, not an error worth a banner.
   const loadRouter = () => api.routerStatus().then(setRouter).catch(() => {});
-  useEffect(() => {
-    api.devices().then(setDevices).catch(() => {});
-    api.profiles().then(setProfiles).catch(() => {});
-    api.activity(200).then(setActivity).catch(() => {});
+
+  /**
+   * The whole dashboard in one load, so a failure is one visible message with a
+   * retry — rather than five silent catches leaving a page of zeros, which
+   * reads as "the house is quiet and everything is fine": the most misleading
+   * thing this page could say.
+   */
+  const load = () => {
+    setLoadError(null);
+    Promise.all([api.devices(), api.profiles(), api.activity(200)])
+      .then(([d, p, a]) => {
+        setDevices(d);
+        setProfiles(p);
+        setActivity(a);
+      })
+      .catch((e: unknown) =>
+        setLoadError((e as Error)?.message || 'Could not load the dashboard.'),
+      )
+      .finally(() => setLoading(false));
+    // Status probes degrade on their own terms — each renders its own state.
     api.networkStatus().then(setNet).catch(() => setNet({ running: false, version: null }));
-    api.systemHealth().then(setHealth).catch(() => {});
+    api.systemHealth().then(setHealth).catch(() => setHealth(undefined));
     loadRouter();
+  };
+
+  useEffect(() => {
+    load();
     const t = setInterval(() => api.systemHealth().then(setHealth).catch(() => {}), 30_000);
     return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const applyContainment = async () => {
@@ -57,6 +83,13 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {loadError && <ErrorNotice message={loadError} onRetry={load} />}
+
+      {/* Zeros are a claim about the household, not a placeholder: showing
+          "0 devices online" while still loading says the house is empty. */}
+      {loading && <Skeleton rows={2} height={64} />}
+
+      {!loading && (
       <div className="grid cards">
         <Stat label="Devices online" value={`${online}/${devices.length}`} />
         <Stat label="Profiles" value={`${profiles.length}`} sub={`${pausedProfiles} paused`} />
@@ -68,6 +101,7 @@ export default function Dashboard() {
           danger={randomized > 0}
         />
       </div>
+      )}
 
       {/* Bedtime/quota state is invisible unless surfaced — a parent should see
           at a glance why a child has no internet right now. */}

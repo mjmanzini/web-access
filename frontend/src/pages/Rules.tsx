@@ -1,16 +1,23 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api/client';
+import { EmptyState, ErrorNotice, Skeleton } from '../components/ui';
 import type { Profile, Rule } from '../api/types';
 
 export default function Rules() {
   const [rules, setRules] = useState<Rule[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [domain, setDomain] = useState('');
   const [scope, setScope] = useState<'global' | 'profile'>('global');
   const [profileId, setProfileId] = useState('');
 
   const load = () => {
-    api.rules().then(setRules).catch(() => {});
+    setErr(null);
+    api.rules()
+      .then(setRules)
+      .catch((e: unknown) => setErr((e as Error)?.message || 'Could not load rules.'))
+      .finally(() => setLoading(false));
     api.profiles().then(setProfiles).catch(() => {});
   };
   useEffect(load, []);

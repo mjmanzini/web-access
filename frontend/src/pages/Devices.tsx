@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import type { BandwidthRow, Device, DnsSetup, Profile } from '../api/types';
 import { formatBytes, formatRate } from '../api/format';
+import { EmptyState, ErrorNotice, Skeleton, useConfirm } from '../components/ui';
 
 /** A name still derived from discovery rather than chosen by the parent. */
 const isAutoName = (d: Device) =>
@@ -36,11 +37,26 @@ export default function Devices() {
   const [showOffline, setShowOffline] = useState(false);
   const [pending, setPending] = useState<Set<string>>(new Set());
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const navigate = useNavigate();
+  const confirm = useConfirm();
 
   const load = () => {
-    api.devices().then(setDevices).catch(() => {});
-    api.profiles().then(setProfiles).catch(() => {});
+    setLoadError(null);
+    // The device list IS this page; a failure here has to be visible rather
+    // than leaving a permanently empty table that looks like "no devices".
+    Promise.all([api.devices(), api.profiles()])
+      .then(([d, p]) => {
+        setDevices(d);
+        setProfiles(p);
+      })
+      .catch((e: unknown) =>
+        setLoadError((e as Error)?.message || 'Could not load devices.'),
+      )
+      .finally(() => setLoading(false));
+    // Bandwidth is decoration on this router (it has no per-host counters), so
+    // its failure must not blank the page.
     api.bandwidth()
       .then((rows) => setBandwidth(Object.fromEntries(rows.map((r) => [r.deviceId, r]))))
       .catch(() => {});
@@ -74,6 +90,18 @@ export default function Devices() {
    * that never reached the backend is indistinguishable from one that worked.
    */
   const toggleBlock = async (d: Device) => {
+    // Only ask when taking access AWAY. Giving it back is not the risky
+    // direction, and confirming both trains people to tap through without
+    // reading — which defeats the point of asking at all.
+    if (!d.blocked) {
+      const ok = await confirm({
+        title: `Cut off "${d.name}"?`,
+        body: 'This device loses internet straight away, until you turn it back on.',
+        confirmLabel: 'Cut it off',
+        danger: true,
+      });
+      if (!ok) return;
+    }
     setPending((prev) => new Set(prev).add(d.id));
     setError('');
     try {
@@ -109,9 +137,29 @@ export default function Devices() {
     }
   };
   const forget = async (d: Device) => {
-    if (!confirm(`Remove "${d.name}" from the device list?\n\nIt will reappear if it is still on the network.`)) return;
-    await api.deleteDevice(d.id);
-    load();
+    const ok = await confirm({
+      title: `Forget "${d.name}"?`,
+      body:
+        'It disappears from the list, along with its profile assignment. A real ' +
+        'device comes back the next time the router gives it an address.',
+      confirmLabel: 'Forget it',
+      danger: true,
+    });
+    if (!ok) return;
+    setPending((prev) => new Set(prev).add(d.id));
+    setError('');
+    try {
+      await api.deleteDevice(d.id);
+      load();
+    } catch (e) {
+      setError(`Could not forget ${d.name}: ${(e as Error).message}`);
+    } finally {
+      setPending((prev) => {
+        const next = new Set(prev);
+        next.delete(d.id);
+        return next;
+      });
+    }
   };
   /** Mint a fresh pairing link for this device and reveal it. */
   const showPair = async (d: Device) => {
@@ -189,6 +237,7 @@ export default function Devices() {
         </div>
       </div>
 
+      {loadError && <ErrorNotice message={loadError} onRetry={load} />}
       {error && <div className="badge danger" style={{ marginBottom: 12, display: "block" }}>{error}</div>}
       {pairError && <div className="badge danger" style={{ marginBottom: 12, display: "block" }}>{pairError}</div>}
 
@@ -392,7 +441,28 @@ export default function Devices() {
               </Fragment>
             ))}
             {!devices.length && (
-              <tr><td colSpan={6} className="muted">No devices yet — run a network scan.</td></tr>
+              <tr>
+                <td colSpan={6}>
+                  {/* Loading and "genuinely nothing here" must not look the
+                      same — that ambiguity is most of what "things just
+                      appear" describes. */}
+                  {loading ? (
+                    <Skeleton rows={4} height={20} />
+                  ) : (
+                    <EmptyState
+                      icon="📡"
+                      title={showOffline ? 'No devices yet' : 'Nothing online right now'}
+                      hint={
+                        showOffline
+                          ? 'Run a network scan to find what is connected.'
+                          : offline.length
+                            ? `${offline.length} offline device(s) hidden — use "Show offline".`
+                            : 'Run a network scan to find what is connected.'
+                      }
+                    />
+                  )}
+                </td>
+              </tr>
             )}
           </tbody>
         </table>

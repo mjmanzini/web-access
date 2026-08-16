@@ -174,7 +174,10 @@ export default function Account() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    api.me().then((u) => setUsername(u.username)).catch(() => {});
+    api.me()
+      .then((u) => setUsername(u.username))
+      // Not fatal: the page still works, the greeting just says less.
+      .catch(() => setUsername(''));
   }, []);
 
   /** Client-side checks; the backend re-validates everything that matters. */

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api/client';
 import type { Profile, ProfileReport, Schedule } from '../api/types';
+import { EmptyState, ErrorNotice, Skeleton, useConfirm } from '../components/ui';
 
 const CATEGORIES = ['adult', 'social', 'gaming', 'video', 'gambling'];
 
@@ -10,10 +11,15 @@ export default function Profiles() {
   const [report, setReport] = useState<{ id: string; data: ProfileReport } | null>(null);
   const [busy, setBusy] = useState(false);
   const [loadingReport, setLoadingReport] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const confirm = useConfirm();
   const [error, setError] = useState<string | null>(null);
 
   const load = () => {
-    api.profiles().then(setProfiles).catch((e) => setError(e.message));
+    api.profiles()
+      .then(setProfiles)
+      .catch((e) => setError(e.message))
+      .finally(() => setLoading(false));
   };
   useEffect(load, []);
 
@@ -39,11 +45,29 @@ export default function Profiles() {
   };
 
   const anyPaused = profiles.some((p) => p.internetPaused);
-  const togglePauseAll = () => run(() => api.pauseAll(!anyPaused));
+  const togglePauseAll = async () => {
+    if (!anyPaused) {
+      const ok = await confirm({
+        title: 'Pause the internet for everyone?',
+        body: `All ${profiles.length} profile(s) lose internet until you resume them.`,
+        confirmLabel: 'Pause everyone',
+        danger: true,
+      });
+      if (!ok) return;
+    }
+    return run(() => api.pauseAll(!anyPaused));
+  };
   const bonus = (p: Profile, minutes: number) => run(() => api.bonusTime(p.id, minutes));
-  const showReport = (id: string) => {
+  const showReport = async (id: string) => {
     if (report?.id === id) return setReport(null);
-    return run(async () => setReport({ id, data: await api.report(id) }));
+    // Fetching a week of activity is not instant on a phone; without this the
+    // button looks inert and gets tapped again.
+    setLoadingReport(id);
+    try {
+      await run(async () => setReport({ id, data: await api.report(id) }));
+    } finally {
+      setLoadingReport(null);
+    }
   };
 
   const create = () =>
@@ -58,8 +82,23 @@ export default function Profiles() {
 
   /** The two independent inputs. Each just sets a field; the backend
       recomputes the effective state and pushes enforcement immediately. */
-  const setSwitch = (p: Profile, internetSwitch: 'auto' | 'off') =>
-    run(() => api.updateProfile(p.id, { internetSwitch }));
+  const setSwitch = async (p: Profile, internetSwitch: 'auto' | 'off') => {
+    // The highest-impact control on the page: it takes a child offline and
+    // keeps them there, overriding bedtime and limits both.
+    if (internetSwitch === 'off') {
+      const devices = (p.devices ?? []).map((d) => d.name).join(', ');
+      const ok = await confirm({
+        title: `Switch off the internet for ${p.name}?`,
+        body: devices
+          ? `${devices} loses internet straight away and stays off until you switch it back on — bedtime and daily limits will not turn it back on.`
+          : 'Their devices lose internet straight away and stay off until you switch it back on.',
+        confirmLabel: 'Switch it off',
+        danger: true,
+      });
+      if (!ok) return;
+    }
+    return run(() => api.updateProfile(p.id, { internetSwitch }));
+  };
   const setBedtime = (p: Profile, bedtimeEnabled: boolean) =>
     run(() => api.updateProfile(p.id, { bedtimeEnabled }));
   const toggleCategory = (p: Profile, cat: string) => {
@@ -130,6 +169,16 @@ export default function Profiles() {
             </button>
           </div>
         </div>
+      )}
+
+      {/* Loading and "there genuinely are none" must look different. */}
+      {loading && <Skeleton rows={3} height={90} />}
+      {!loading && !profiles.length && (
+        <EmptyState
+          icon="👤"
+          title="No profiles yet"
+          hint="Add one above, then assign a device to it on the Devices page."
+        />
       )}
 
       <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(300px,1fr))' }}>
@@ -287,14 +336,22 @@ function Toggle({
  * them. A window may cross midnight — 21:00→06:00 is the common case.
  */
 function Bedtime({ profileId }: { profileId: string }) {
+  const confirm = useConfirm();
   const [items, setItems] = useState<Schedule[]>([]);
+  const [schedLoading, setSchedLoading] = useState(true);
+  const [schedErr, setSchedErr] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
   const [start, setStart] = useState('21:00');
   const [end, setEnd] = useState('06:00');
   const [label, setLabel] = useState('Bedtime');
   const [days, setDays] = useState<string[]>(['0', '1', '2', '3', '4', '5', '6']);
 
-  const load = () => api.schedules(profileId).then(setItems).catch(() => {});
+  const load = () =>
+    api
+      .schedules(profileId)
+      .then(setItems)
+      .catch((e: unknown) => setSchedErr((e as Error)?.message || 'Could not load bedtime windows.'))
+      .finally(() => setSchedLoading(false));
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -311,7 +368,13 @@ function Bedtime({ profileId }: { profileId: string }) {
     load();
   };
   const remove = async (s: Schedule) => {
-    if (!confirm(`Remove "${s.label}" (${s.startTime}–${s.endTime})?`)) return;
+    const ok = await confirm({
+      title: `Delete "${s.label}"?`,
+      body: `The ${s.startTime}–${s.endTime} window goes away, and the internet will no longer switch off then.`,
+      confirmLabel: 'Delete it',
+      danger: true,
+    });
+    if (!ok) return;
     await api.deleteSchedule(s.id);
     load();
   };

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
+import { EmptyState, ErrorNotice, Skeleton } from '../components/ui';
 import type { ActivityLog } from '../api/types';
 
 /** Rows are keyed by device when known, else by raw client IP. */
@@ -14,16 +15,25 @@ export default function Activity() {
   // crowded out of the window by a chatty one.
   const [deviceRows, setDeviceRows] = useState<ActivityLog[]>([]);
   const [filter, setFilter] = useState<'all' | 'blocked'>('all');
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
   const [params, setParams] = useSearchParams();
 
   const selected = params.get('device');
 
   const load = () => {
-    api.activity(300).then(setAll).catch(() => {});
+    setErr(null);
+    api.activity(300)
+      .then(setAll)
+      .catch((e: unknown) => setErr((e as Error)?.message || 'Could not load activity.'))
+      .finally(() => setLoading(false));
     if (selected) {
       // Unknown clients have no device id; those filter client-side instead.
       const isDeviceId = selected.includes('-');
-      if (isDeviceId) api.activity(300, selected).then(setDeviceRows).catch(() => {});
+      if (isDeviceId)
+        api.activity(300, selected)
+          .then(setDeviceRows)
+          .catch((e: unknown) => setErr((e as Error)?.message || 'Could not load that device.'));
     } else {
       setDeviceRows([]);
     }
