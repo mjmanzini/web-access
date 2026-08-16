@@ -49,6 +49,11 @@ export default function App() {
         >
           Sign out
         </button>
+        {/* Which code is this device actually running? Reading this off the
+            screen settles "the feature isn't there" in one second. */}
+        <div className="muted" style={{ fontSize: 10, marginTop: 10, textAlign: 'center' }}>
+          build {__BUILD_ID__}
+        </div>
       </aside>
 
       <main className="main">

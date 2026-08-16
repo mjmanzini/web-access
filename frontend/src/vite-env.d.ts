@@ -7,3 +7,6 @@ interface ImportMetaEnv {
 interface ImportMeta {
   readonly env: ImportMetaEnv;
 }
+
+/** Short git SHA of the build, injected at compile time. */
+declare const __BUILD_ID__: string;
