@@ -242,6 +242,51 @@ export class AdguardService implements NetworkProvider {
     }
   }
 
+  /**
+   * The ten minutes before bedtime: stop new video starting.
+   *
+   * DNS blocking cannot end a stream that is already running. YouTube resolves
+   * a googlevideo host once, opens QUIC connections to it, and then pulls
+   * segments over those same connections for as long as they stay open — no
+   * further lookups, nothing for a resolver to refuse. Bedtime arrived and the
+   * video kept playing.
+   *
+   * Blocking the video CDNs at T-10 does not fix that (only a link-layer cutoff
+   * does) but it changes the shape of the problem: no new stream can start in
+   * the run-up, and whatever is playing runs its buffer down instead of topping
+   * it up. Ten minutes of buffer is not a thing.
+   */
+  async setPreBedtimeIdentifiers(identifiers: string[]): Promise<void> {
+    const unique = [...new Set(identifiers)];
+    const rules: string[] = [];
+    for (const id of unique) {
+      for (const domain of AdguardService.VIDEO_DOMAINS) {
+        rules.push(`||${domain}^$client='${id}'`);
+      }
+    }
+    await this.setManagedBucket('__prebedtime__', rules.length ? rules : null);
+  }
+
+  /**
+   * Segment/CDN hosts, not front doors. Blocking `youtube.com` stops the page
+   * loading but not playback already in flight; `googlevideo.com` is where the
+   * segments actually come from, so a player that tries to open a new stream
+   * fails immediately.
+   */
+  private static readonly VIDEO_DOMAINS = [
+    'googlevideo.com',
+    'youtube.com',
+    'youtubei.googleapis.com',
+    'ytimg.com',
+    'nflxvideo.net',
+    'netflix.com',
+    'ttvnw.net',
+    'tiktokcdn.com',
+    'tiktokv.com',
+    'dstv.stream',
+    'showmax.com',
+  ];
+
   async fetchQueryLog(limit: number): Promise<NetworkQueryLogEntry[]> {
     const rows = await this.api.queryLog(limit);
     return rows.map((r) => ({

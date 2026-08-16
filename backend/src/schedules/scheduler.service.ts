@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression, Interval } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -11,6 +11,10 @@ import { DevicesService } from '../devices/devices.service';
 import { ActivityService } from '../activity/activity.service';
 import { SchedulesService } from './schedules.service';
 import { PushService } from '../push/push.service';
+import {
+  NETWORK_PROVIDER,
+  NetworkProvider,
+} from '../network/network-provider.interface';
 
 /**
  * The enforcement heartbeat. Three timers:
@@ -36,6 +40,7 @@ export class SchedulerService {
     private devices: DevicesService,
     private activity: ActivityService,
     private push: PushService,
+    @Inject(NETWORK_PROVIDER) private network: NetworkProvider,
   ) {}
 
   @Interval(30_000)
@@ -127,6 +132,9 @@ export class SchedulerService {
       relations: { schedules: true, devices: true },
     });
     const now = new Date();
+    // Devices inside the run-up window, recomputed from scratch each tick so
+    // the set clears itself the moment bedtime starts or the window moves.
+    const preBedtime: string[] = [];
 
     for (const profile of profiles) {
       if (profile.bedtimeEnabled === false) continue;
@@ -138,6 +146,13 @@ export class SchedulerService {
         if (!s.enabled) continue;
         const mins = SchedulesService.minutesUntilStart(s, now);
         if (mins === null || mins > WARN_MINUTES || mins <= 0) continue;
+
+        // Inside the run-up: stop new video starting, so nothing is mid-stream
+        // when the block lands and buffers drain instead of refilling.
+        for (const d of profile.devices ?? []) {
+          if (d.clientId) preBedtime.push(d.clientId);
+          if (d.ipAddress) preBedtime.push(d.ipAddress);
+        }
 
         const key = `${s.id}:${now.toISOString().slice(0, 10)}:${s.startTime}`;
         if (this.warned.has(key)) continue;
@@ -155,6 +170,13 @@ export class SchedulerService {
           this.logger.warn(`bedtime warning failed: ${(e as Error).message}`);
         }
       }
+    }
+
+    // Idempotent, and self-clearing: an empty set drops the bucket entirely.
+    try {
+      await this.network.setPreBedtimeIdentifiers(preBedtime);
+    } catch (e) {
+      this.logger.warn(`pre-bedtime tightening failed: ${(e as Error).message}`);
     }
 
     // Keep the dedupe set from growing forever; yesterday's keys can never

@@ -76,6 +76,13 @@ export interface NetworkProvider {
    */
   setBlockedClientIdentifiers(identifiers: string[]): Promise<void>;
 
+  /**
+   * Block streaming video for these clients ahead of a full block. DNS cannot
+   * stop a video that is already playing, so the only way bedtime lands on time
+   * is to stop new streams starting shortly before it.
+   */
+  setPreBedtimeIdentifiers(identifiers: string[]): Promise<void>;
+
   /** Pull recent query-log entries, newest first, up to `limit`. */
   fetchQueryLog(limit: number): Promise<NetworkQueryLogEntry[]>;
 }

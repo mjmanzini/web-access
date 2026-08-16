@@ -98,13 +98,43 @@ describe('huawei parsers', () => {
     ]);
   });
 
-  it('builds a blacklist MAC filter payload for both SSIDs', () => {
+  /**
+   * These assertions previously described a payload shape that does not exist.
+   * They passed for weeks while every real write was rejected with error 9003,
+   * because they tested the invention rather than the firmware. The shape below
+   * is copied from an actual GET on a B525s-65a: one <Ssid> block per SSID,
+   * flat field names, no per-index suffixes and no Mode field.
+   */
+  it('builds a blacklist payload in the shape the firmware returns', () => {
+    const body = buildMultiMacFilter(['A4-83-E7-00-11-22'], [0, 1]);
+
+    expect(body).toContain('<Ssids>');
+    expect(body).toContain('<Ssid><Index>0</Index>');
+    expect(body).toContain('<Ssid><Index>1</Index>');
+    // Flat, unsuffixed slots — the old `WifiMacFilterMac0_0` form was invented.
+    expect(body).toContain('<WifiMacFilterMac0>a4:83:e7:00:11:22</WifiMacFilterMac0>');
+    expect(body).not.toMatch(/WifiMacFilterMac\d_\d/);
+    expect(body).not.toContain('WifiMacFilterMode');
+    // Ten slots and ten hostname fields per SSID, as returned.
+    expect((body.match(/<WifiMacFilterMac\d>/g) ?? []).length).toBe(20);
+    expect((body.match(/<wifihostname\d>/g) ?? []).length).toBe(20);
+  });
+
+  it('uses deny-list (2), never allow-list (1)', () => {
     const body = buildMultiMacFilter(['A4-83-E7-00-11-22']);
-    expect(body).toContain('<WifiMacFilterStatus0>1</WifiMacFilterStatus0>');
-    expect(body).toContain('<WifiMacFilterMode0>1</WifiMacFilterMode0>');
-    expect(body).toContain('<WifiMacFilterMac0_0>a4:83:e7:00:11:22</WifiMacFilterMac0_0>');
-    expect(body).toContain('<WifiMacFilterMac1_0>a4:83:e7:00:11:22</WifiMacFilterMac1_0>');
-    // Empty list disables the filter.
-    expect(buildMultiMacFilter([])).toContain('<WifiMacFilterStatus0>0</WifiMacFilterStatus0>');
+    expect(body).toContain('<WifiMacFilterStatus>2</WifiMacFilterStatus>');
+    // Status 1 is an ALLOW-list: writing it with one MAC would throw every
+    // other device in the house off Wi-Fi, including the machine that would
+    // have to undo it. It must never be generated.
+    expect(body).not.toContain('<WifiMacFilterStatus>1</WifiMacFilterStatus>');
+  });
+
+  it('disables the filter when the list is empty', () => {
+    expect(buildMultiMacFilter([])).toContain('<WifiMacFilterStatus>0</WifiMacFilterStatus>');
+  });
+
+  it('covers every SSID by default — a device can sit on 2.4GHz or 5GHz', () => {
+    const body = buildMultiMacFilter(['A4-83-E7-00-11-22']);
+    for (const i of [0, 1, 2, 3]) expect(body).toContain(`<Index>${i}</Index>`);
   });
 });

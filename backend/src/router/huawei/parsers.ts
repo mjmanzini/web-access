@@ -45,17 +45,37 @@ export function parseHostList(xml: string): RouterLease[] {
  * This targets the common B525 scheme (status 1 = on, mode "1" = blacklist).
  * Validate against the device and adjust if the router rejects it.
  */
-export function buildMultiMacFilter(macs: string[], ssidIndexes = [0, 1]): string {
+/**
+ * Wi-Fi MAC blacklist payload for /api/wlan/multi-macfilter-settings.
+ *
+ * The previous version was rejected with error 9003 on every attempt because it
+ * invented a shape the firmware does not use: suffixed `Index0`,
+ * `WifiMacFilterMac0_0` and a separate `WifiMacFilterMode`. Reading the GET
+ * response back showed what a B525s-65a actually wants — one <Ssid> block per
+ * radio/SSID, each carrying a flat `Index`, `WifiMacFilterStatus`, and ten
+ * `WifiMacFilterMac0..9` / `wifihostname0..9` fields. Mirror the response.
+ *
+ * `WifiMacFilterStatus`: 0 = off, 1 = allow-list, 2 = deny-list. Only 0 and 2
+ * are ever written here. Writing 1 would turn the list into an ALLOW-list and
+ * throw every other device in the house off Wi-Fi — including, on this
+ * installation, the machine running Home Guardian, which reaches the router
+ * over Wi-Fi and would lose the very access needed to undo it.
+ */
+export function buildMultiMacFilter(macs: string[], ssidIndexes = [0, 1, 2, 3]): string {
   const norm = macs.map(normalizeMac).filter(Boolean).slice(0, 10) as string[];
-  const fields: Array<[string, string | number]> = [];
-  for (const idx of ssidIndexes) {
-    fields.push([`Index${idx}`, idx]);
-    fields.push([`wifihostname${idx}`, '']);
-    fields.push([`WifiMacFilterStatus${idx}`, norm.length ? 1 : 0]);
-    fields.push([`WifiMacFilterMode${idx}`, 1]); // 1 = blacklist (deny listed)
-    for (let slot = 0; slot < 10; slot++) {
-      fields.push([`WifiMacFilterMac${idx}_${slot}`, norm[slot] ?? '']);
-    }
-  }
-  return buildRequest(fields);
+  const status = norm.length ? 2 : 0; // deny-list, or disabled when empty
+
+  const ssids = ssidIndexes
+    .map((idx) => {
+      const fields: string[] = [`<Index>${idx}</Index>`, `<WifiMacFilterStatus>${status}</WifiMacFilterStatus>`];
+      for (let slot = 0; slot < 10; slot++) {
+        fields.push(`<WifiMacFilterMac${slot}>${norm[slot] ?? ''}</WifiMacFilterMac${slot}>`);
+        fields.push(`<wifihostname${slot}></wifihostname${slot}>`);
+      }
+      return `<Ssid>${fields.join('')}</Ssid>`;
+    })
+    .join('');
+
+  return `<?xml version="1.0" encoding="UTF-8"?><request><Ssids>${ssids}</Ssids></request>`;
 }
+

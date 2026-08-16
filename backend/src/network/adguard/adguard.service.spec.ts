@@ -160,3 +160,61 @@ describe('AdguardService — blocked-client rule composition', () => {
     ]);
   });
 });
+
+/**
+ * DNS cannot stop a video that is already playing — YouTube resolves a
+ * googlevideo host once and then pulls segments over connections that are
+ * already open. Blocking the CDNs before bedtime is what stops a new stream
+ * starting, so the buffer drains instead of refilling.
+ */
+describe('AdguardService — pre-bedtime video tightening', () => {
+  function harness() {
+    const state = { rules: [] as string[] };
+    const api = {
+      getUserRules: async () => [...state.rules],
+      setUserRules: async (r: string[]) => { state.rules = [...r]; },
+      getAccessList: async () => ({ allowed_clients: [], disallowed_clients: [], blocked_hosts: [] }),
+      setAccessList: async () => undefined,
+    };
+    const svc = new AdguardService(new ConfigService({}));
+    (svc as unknown as { api: unknown }).api = api;
+    return { svc, state };
+  }
+
+  it('blocks the segment CDNs for the given clients', async () => {
+    const { svc, state } = harness();
+    await svc.setPreBedtimeIdentifiers(['192.168.8.112']);
+
+    // googlevideo is where the bytes come from; blocking youtube.com alone
+    // stops the page, not the playback.
+    expect(state.rules).toContain("||googlevideo.com^$client='192.168.8.112'");
+    expect(state.rules).toContain("||nflxvideo.net^$client='192.168.8.112'");
+  });
+
+  it('scopes every rule to a client, never globally', async () => {
+    const { svc, state } = harness();
+    await svc.setPreBedtimeIdentifiers(['tab-80-kids-e0cf']);
+    const managed = state.rules.filter((r) => r.startsWith('||'));
+    expect(managed.length).toBeGreaterThan(0);
+    // A rule without $client would take video off every device in the house.
+    expect(managed.every((r) => r.includes("$client='tab-80-kids-e0cf'"))).toBe(true);
+  });
+
+  it('clears itself when no device is in the run-up window', async () => {
+    const { svc, state } = harness();
+    await svc.setPreBedtimeIdentifiers(['192.168.8.112']);
+    expect(state.rules.some((r) => r.includes('googlevideo'))).toBe(true);
+
+    await svc.setPreBedtimeIdentifiers([]);
+    expect(state.rules.some((r) => r.includes('googlevideo'))).toBe(false);
+  });
+
+  it('does not disturb the blocked-client bucket', async () => {
+    const { svc, state } = harness();
+    await svc.setBlockedClientIdentifiers(['192.168.8.112']);
+    await svc.setPreBedtimeIdentifiers(['192.168.8.60']);
+
+    expect(state.rules).toContain("||*^$client='192.168.8.112'");
+    expect(state.rules).toContain("||googlevideo.com^$client='192.168.8.60'");
+  });
+});
