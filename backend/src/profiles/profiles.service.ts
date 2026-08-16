@@ -217,16 +217,19 @@ export class ProfilesService {
       body = 'You’re good to go.';
     } else if (reason === 'bedtime') {
       const until = this.currentBedtimeEnd(profile);
-      title = 'Bedtime — internet off';
+      // Leads with the fact and the instruction, because on a lock screen the
+      // title may be all that is read. Apps sitting there buffering is the
+      // symptom this has to explain.
+      title = 'Internet is off — tap to see why';
       body = until
-        ? `The internet is off until ${until}. It will switch back on by itself.`
-        : 'The internet is off for bedtime. It will switch back on by itself.';
+        ? `Bedtime. It comes back on at ${until} by itself.`
+        : 'Bedtime. It comes back on by itself.';
     } else if (reason === 'quota_exceeded') {
-      title = 'Screen time is used up';
+      title = 'Internet is off — tap to see why';
       body = 'That’s all of today’s internet time. It resets tomorrow morning.';
     } else {
-      title = 'A parent paused the internet';
-      body = 'It will come back when they turn it on again.';
+      title = 'Internet is off — tap to see why';
+      body = 'A parent paused it. It comes back when they turn it on again.';
     }
 
     try {
@@ -235,6 +238,12 @@ export class ProfilesService {
         body,
         url: '/status',
         tag: 'kids-state',
+        // A block has to survive not being looked at for a minute: it stays on
+        // screen until tapped and buzzes. "Back on" is good news that can fade
+        // by itself.
+        requireInteraction: reason !== null,
+        vibrate: reason !== null ? [300, 120, 300, 120, 300] : [120],
+        urgent: reason !== null,
       });
     } catch (err) {
       this.logger.warn(`kid notification failed: ${(err as Error).message}`);

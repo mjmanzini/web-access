@@ -219,6 +219,20 @@ export class ActivityService {
   }
 
   /** Count distinct 5-minute active buckets today → an "active minutes" proxy. */
+  /**
+   * How many blocked lookups these devices made since a moment. Used to tell a
+   * device that has quietly given up from one still hammering at the block.
+   */
+  async blockedCountSince(deviceIds: string[], since: Date): Promise<number> {
+    if (!deviceIds.length) return 0;
+    return this.logs
+      .createQueryBuilder('a')
+      .where('a.deviceId IN (:...ids)', { ids: deviceIds })
+      .andWhere('a.timestamp >= :since', { since })
+      .andWhere("a.action = 'blocked'")
+      .getCount();
+  }
+
   async activeMinutesToday(profileId: string): Promise<number> {
     const start = new Date();
     start.setHours(0, 0, 0, 0);

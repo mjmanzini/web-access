@@ -199,8 +199,10 @@ self.addEventListener('push', (event) => {
       badge: '/kids/icon-192.png',
       tag: p.tag || 'home-guardian-kids',
       renotify: true,
-      // A bedtime warning that arrives silently is useless.
-      requireInteraction: p.tag === 'bedtime-warning',
+      // The server decides what has to be noticed; a warning and a block both
+      // stay on screen until tapped, an "all clear" does not.
+      requireInteraction: p.requireInteraction === true,
+      vibrate: p.vibrate || [200, 100, 200],
       data: { url: p.url || '/status' },
     }),
   );
@@ -214,8 +216,26 @@ self.addEventListener('notificationclick', (event) => {
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
       for (const c of list) {
-        if ('focus' in c) { c.navigate(target); return c.focus(); }
+        if (!('focus' in c)) continue;
+        // navigate() throws on a client this worker does not control (an
+        // ordinary tab, or one opened before the worker took over). Focus it
+        // anyway — a focused stale page beats no window at all — and fall
+        // through to opening a fresh one if even that fails.
+        try {
+          const navigated = c.navigate(target);
+          if (navigated && typeof navigated.then === 'function') {
+            return navigated.then(function (client) {
+              return (client || c).focus();
+            }, function () {
+              return c.focus();
+            });
+          }
+        } catch (_) { /* fall through to focus */ }
+        return c.focus();
       }
+      return self.clients.openWindow(target);
+    }).catch(function () {
+      // Last resort: if enumeration itself failed, still open the page.
       return self.clients.openWindow(target);
     }),
   );

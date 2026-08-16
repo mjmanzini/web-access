@@ -29,6 +29,12 @@ import {
 /** How long before bedtime the child is warned. */
 const WARN_MINUTES = 10;
 
+/** How long into a block before one follow-up notification, if still needed. */
+const NAG_AFTER_MS = 5 * 60_000;
+
+/** Blocked lookups in that window that count as "still trying", not noise. */
+const NAG_MIN_BLOCKED = 5;
+
 @Injectable()
 export class SchedulerService {
   private readonly logger = new Logger(SchedulerService.name);
@@ -100,6 +106,8 @@ export class SchedulerService {
       }
     }
 
+    await this.nagStillTrying(profiles);
+
     // Reconcile every tick, not just on change. The database is the source of
     // truth for who is blocked; AdGuard is a cache of that decision, and a cache
     // can drift (a lost write, a manual edit, an AdGuard restart). Pushing only
@@ -115,6 +123,61 @@ export class SchedulerService {
 
   /** Fired for a given occurrence already, so nobody is warned twice. */
   private warned = new Set<string>();
+
+  /** When each profile's current block started, and whether we have nagged. */
+  private blockedSince = new Map<string, { at: number; nagged: boolean }>();
+
+  /**
+   * One follow-up, and only when it is warranted.
+   *
+   * The first notification can be missed — the tablet is face-down, the child
+   * is mid-video, the screen is off. What tells us it was missed is the device
+   * still hammering away: apps retrying, queries piling up against the block.
+   * If that is still happening five minutes in, say it once more. Once. A
+   * second nag would just teach everyone to swipe these away.
+   */
+  private async nagStillTrying(profiles: Profile[]): Promise<void> {
+    const now = Date.now();
+
+    for (const profile of profiles) {
+      if (!profile.internetPaused) {
+        this.blockedSince.delete(profile.id);
+        continue;
+      }
+      const state = this.blockedSince.get(profile.id);
+      if (!state) {
+        this.blockedSince.set(profile.id, { at: now, nagged: false });
+        continue;
+      }
+      if (state.nagged || now - state.at < NAG_AFTER_MS) continue;
+
+      const deviceIds = (profile.devices ?? []).map((d) => d.id);
+      if (!deviceIds.length) continue;
+
+      // Still generating blocked traffic? Then the message did not land.
+      const since = new Date(now - NAG_AFTER_MS);
+      const stillTrying = await this.activity.blockedCountSince(deviceIds, since);
+      state.nagged = true; // one attempt either way — never re-evaluated
+      if (stillTrying < NAG_MIN_BLOCKED) continue;
+
+      try {
+        const sent = await this.push.sendToDevices(deviceIds, {
+          title: 'Internet is still off',
+          body: 'Apps will keep failing until it comes back. Tap to see when.',
+          url: '/status',
+          tag: 'kids-state',
+          requireInteraction: true,
+          vibrate: [300, 120, 300, 120, 300],
+          urgent: true,
+        });
+        this.logger.log(
+          `"${profile.name}" still generating blocked traffic (${stillTrying}) — nagged ${sent} device(s)`,
+        );
+      } catch (e) {
+        this.logger.warn(`nag failed: ${(e as Error).message}`);
+      }
+    }
+  }
 
   /**
    * "Bedtime in 10 minutes."

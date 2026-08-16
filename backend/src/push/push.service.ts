@@ -6,6 +6,25 @@ import * as webpush from 'web-push';
 import { PushSubscription } from '../entities/push-subscription.entity';
 
 /**
+ * What the service worker is asked to show. The presentation knobs live here
+ * rather than being guessed in the worker, so a caller can say "this one has to
+ * be noticed" without the worker needing to know why.
+ */
+export interface PushPayload {
+  title: string;
+  body: string;
+  url?: string;
+  tag?: string;
+  /** Stay on screen until tapped, rather than fading after a few seconds. */
+  requireInteraction?: boolean;
+  /** Vibration pattern in ms; [] means silent-ish. */
+  vibrate?: number[];
+  /** Ask the push service to wake the device promptly. */
+  urgent?: boolean;
+  ttlSeconds?: number;
+}
+
+/**
  * Web Push delivery to the installed dashboard.
  *
  * Runs alongside the Discord webhook rather than replacing it: Discord is the
@@ -86,7 +105,7 @@ export class PushService implements OnModuleInit {
    * Fan a notification out to every subscribed device. Never throws: a dead
    * endpoint must not break the alert path that triggered it.
    */
-  async send(payload: { title: string; body: string; url?: string; tag?: string }): Promise<number> {
+  async send(payload: PushPayload): Promise<number> {
     // Parent broadcast: device-scoped rows are excluded, so a child's tablet
     // never receives household alerts ("bypass attempt on X", "new device
     // joined") — only messages addressed to it by sendToDevices().
@@ -123,7 +142,7 @@ export class PushService implements OnModuleInit {
   /** Notify specific child devices — nobody else. */
   async sendToDevices(
     deviceIds: string[],
-    payload: { title: string; body: string; url?: string; tag?: string },
+    payload: PushPayload,
   ): Promise<number> {
     if (!deviceIds.length) return 0;
     return this.deliver(await this.subs.find({ where: { deviceId: In(deviceIds) } }), payload);
@@ -136,7 +155,7 @@ export class PushService implements OnModuleInit {
 
   private async deliver(
     all: PushSubscription[],
-    payload: { title: string; body: string; url?: string; tag?: string },
+    payload: PushPayload,
   ): Promise<number> {
     if (!this.enabled) return 0;
     let delivered = 0;
@@ -146,6 +165,13 @@ export class PushService implements OnModuleInit {
         await webpush.sendNotification(
           { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
           JSON.stringify(payload),
+          {
+            // "The internet just stopped" is worth waking the radio for; the
+            // same message ten minutes late explains nothing.
+            urgency: payload.urgent ? 'high' : 'normal',
+            // And there is no point delivering a bedtime notice an hour on.
+            TTL: payload.ttlSeconds ?? 600,
+          },
         );
         delivered++;
         if (sub.failures) await this.subs.update(sub.id, { failures: 0 });
@@ -167,6 +193,13 @@ export class PushService implements OnModuleInit {
           this.logger.warn(`push send failed (${status ?? 'no status'})`);
         }
       }
+    }
+    // So "did it actually arrive?" is answerable from the log tomorrow morning
+    // rather than from memory.
+    if (all.length) {
+      this.logger.log(
+        `push "${payload.tag ?? payload.title}" → ${delivered}/${all.length} delivered`,
+      );
     }
     return delivered;
   }
