@@ -90,6 +90,9 @@ services:
       # secure context, so the plain-HTTP LAN host can only ever be a bookmark.
       # Blocked devices get an automatic allow rule for this hostname.
       KIDS_PUBLIC_URL: ${KIDS_PUBLIC_URL:-}
+      # Public origin of the parent dashboard, used to build invite/reset links
+      # so they can be opened on another parent's phone.
+      DASHBOARD_PUBLIC_URL: ${DASHBOARD_PUBLIC_URL:-}
       # Hosts a blocked device may still resolve, so the kid app can still be
       # told why it is blocked. Empty closes the hole (and the notifications).
       PUSH_ALLOW_DOMAINS: ${PUSH_ALLOW_DOMAINS:-mtalk.google.com,fcm.googleapis.com}

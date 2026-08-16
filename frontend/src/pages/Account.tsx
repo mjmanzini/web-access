@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api/client';
+import Parents from '../components/Parents';
 
 const MIN_LENGTH = 8; // matches the backend's ChangePasswordDto
 
@@ -264,6 +265,8 @@ export default function Account() {
           seeds the first admin on a fresh database.
         </p>
       </div>
+
+      <Parents />
     </>
   );
 }

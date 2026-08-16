@@ -46,6 +46,13 @@ export default function Login() {
           <button type="submit" disabled={busy}>
             {busy ? 'Signing in…' : 'Sign in'}
           </button>
+          {/* No mailer, and none needed: Cloudflare Access already gates this
+              origin, so a reset is a link the other parent hands over. Saying
+              so beats a "reset email sent" that never arrives. */}
+          <div className="muted" style={{ fontSize: 12, lineHeight: 1.5 }}>
+            Forgotten your password? Ask the other parent to open{' '}
+            <strong>Account → Parents</strong> and send you a reset link.
+          </div>
         </div>
       </form>
     </div>

@@ -165,3 +165,21 @@ export interface Alert {
   domain?: string;
   at: string;
 }
+
+/** A dashboard login. Two roles: 'admin' manages accounts, 'parent' does not. */
+export interface ParentAccount {
+  id: string;
+  username: string;
+  displayName: string | null;
+  email: string | null;
+  role: 'admin' | 'parent';
+  createdAt: string;
+  hasPassword: boolean;
+  pendingInvite: boolean;
+}
+
+export interface InviteLink {
+  token: string;
+  url: string;
+  expiresAt: string;
+}

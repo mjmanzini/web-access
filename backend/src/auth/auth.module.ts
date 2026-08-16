@@ -6,6 +6,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AdminUser } from '../entities/admin-user.entity';
 import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
+import { UsersController } from './users.controller';
 import { JwtAuthGuard } from './jwt-auth.guard';
 
 /**
@@ -26,7 +27,7 @@ import { JwtAuthGuard } from './jwt-auth.guard';
       }),
     }),
   ],
-  controllers: [AuthController],
+  controllers: [AuthController, UsersController],
   providers: [AuthService, { provide: APP_GUARD, useClass: JwtAuthGuard }],
   exports: [JwtModule],
 })

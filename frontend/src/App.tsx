@@ -7,6 +7,7 @@ import Rules from './pages/Rules';
 import Activity from './pages/Activity';
 import Requests from './pages/Requests';
 import Login from './pages/Login';
+import Invite from './pages/Invite';
 import Account from './pages/Account';
 import AlertsFeed from './components/AlertsFeed';
 import ErrorBoundary from './components/ErrorBoundary';
@@ -26,6 +27,15 @@ export default function App() {
   const [authed, setAuthed] = useState(auth.isAuthed);
   const { pathname } = useLocation();
   useEffect(() => auth.subscribe(setAuthed), []);
+
+  // An invite link must work while signed out — that is its whole purpose.
+  if (pathname.startsWith('/invite/')) {
+    return (
+      <Routes>
+        <Route path="/invite/:token" element={<Invite />} />
+      </Routes>
+    );
+  }
 
   if (!authed) return <Login />;
 

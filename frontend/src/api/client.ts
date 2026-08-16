@@ -4,6 +4,8 @@ import type {
   BandwidthRow,
   Device,
   DnsSetup,
+  InviteLink,
+  ParentAccount,
   Profile,
   ProfileReport,
   RouterStatus,
@@ -53,6 +55,21 @@ export const api = {
       body: JSON.stringify({ username, password }),
     }),
   me: () => request<{ id: string; username: string }>('/auth/me'),
+
+  // parent accounts
+  parentAccounts: () => request<ParentAccount[]>('/users'),
+  createParent: (body: { username: string; displayName?: string; email?: string; role?: 'admin' | 'parent' }) =>
+    request<InviteLink & { id: string }>('/users', { method: 'POST', body: JSON.stringify(body) }),
+  resetLinkFor: (id: string) =>
+    request<InviteLink>(`/users/${id}/reset-link`, { method: 'POST' }),
+  deleteParent: (id: string) => request<{ ok: true }>(`/users/${id}`, { method: 'DELETE' }),
+  inviteHolder: (token: string) =>
+    request<{ username: string; displayName: string | null }>(`/users/invite/${token}`),
+  redeemInvite: (token: string, password: string) =>
+    request<{ token: string }>(`/users/invite/${token}`, {
+      method: 'POST',
+      body: JSON.stringify({ password }),
+    }),
   changePassword: (currentPassword: string, newPassword: string) =>
     request<{ ok: true }>(
       '/auth/change-password',
