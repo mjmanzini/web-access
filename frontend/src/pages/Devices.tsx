@@ -196,7 +196,7 @@ export default function Devices() {
         <table>
           <thead>
             <tr>
-              <th>Device</th><th>Identity</th><th>Today ↓/↑</th><th>Profile</th><th>Status</th><th></th>
+              <th>Device</th><th>Identity</th><th>Active today</th><th>Profile</th><th>Status</th><th></th>
             </tr>
           </thead>
           <tbody>
@@ -262,6 +262,12 @@ export default function Devices() {
                     )}{' '}
                     {d.macRandomized && <span className="badge warn">rnd MAC</span>}
                   </td>
+                  {/* This column promised bytes and always read "0 B / 0 B":
+                      AdGuard sees DNS names, not traffic, and this router
+                      exposes no per-host counters — only whole-WAN totals. Real
+                      bytes still render IF a router ever supplies them;
+                      otherwise show something true rather than a zero that
+                      reads as "used nothing". */}
                   <td className="muted" style={{ whiteSpace: 'nowrap' }}>
                     {bandwidth[d.id]
                       ? <>
@@ -270,7 +276,13 @@ export default function Devices() {
                             <div style={{ fontSize: 11 }}>{formatRate(bandwidth[d.id].rxRateBps)} ↓</div>
                           )}
                         </>
-                      : '—'}
+                      : d.lastFilteredAt ? (
+                        <span title="When the filter last saw this device ask for anything. Not megabytes — AdGuard sees DNS names, not traffic, and this router reports no per-device totals.">
+                          {lastSeen(d.lastFilteredAt)}
+                        </span>
+                      ) : (
+                        '—'
+                      )}
                   </td>
                   <td>
                     <select value={d.profileId ?? ''} onChange={(e) => assign(d.id, e.target.value)}>

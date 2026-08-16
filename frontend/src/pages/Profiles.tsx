@@ -408,6 +408,8 @@ function ReportPanel({ data }: { data: ProfileReport }) {
           />
         ))}
       </div>
+      <DeviceUsage data={data} />
+
       <div className="muted" style={{ fontSize: 12, marginTop: 10 }}>Top domains (7d)</div>
       {data.topDomains.length ? (
         data.topDomains.slice(0, 5).map((t) => (
@@ -419,6 +421,83 @@ function ReportPanel({ data }: { data: ProfileReport }) {
       ) : (
         <div className="muted" style={{ fontSize: 13 }}>No history yet.</div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Per-device usage for a profile.
+ *
+ * The obvious ask was megabytes, and the honest answer is that nothing here can
+ * measure them: AdGuard sees DNS lookups, not traffic, and this router's API
+ * exposes only whole-WAN totals — no per-host counters at any endpoint. So this
+ * reports what IS measured, and says so, rather than showing a plausible number
+ * that would be fiction. "Active" is the same measure the daily limit enforces,
+ * which also means the two can never disagree.
+ */
+function DeviceUsage({ data }: { data: ProfileReport }) {
+  const devices = data.devices ?? [];
+  if (!devices.length) {
+    return (
+      <div className="muted" style={{ fontSize: 12, marginTop: 12 }}>
+        No devices assigned to this profile yet.
+      </div>
+    );
+  }
+
+  // Busiest first — that is the question a parent is actually asking.
+  const sorted = [...devices].sort(
+    (a, b) => b.activeMinutesToday - a.activeMinutesToday || b.lookupsToday - a.lookupsToday,
+  );
+  const busiest = Math.max(1, ...sorted.map((d) => d.activeMinutesToday));
+
+  return (
+    <div style={{ marginTop: 14 }}>
+      <div className="row" style={{ justifyContent: 'space-between', marginBottom: 8 }}>
+        <span className="muted" style={{ fontSize: 12 }}>Usage by device</span>
+        <span className="muted" style={{ fontSize: 11 }}>
+          {data.deviceTotals?.activeMinutesToday ?? 0}m active today
+        </span>
+      </div>
+
+      {sorted.map((d) => (
+        <div key={d.deviceId} style={{ marginBottom: 10 }}>
+          <div className="row" style={{ justifyContent: 'space-between', gap: 8 }}>
+            <span style={{ fontSize: 13, overflowWrap: 'anywhere' }}>
+              <span className={`dot ${d.isOnline ? 'on' : 'off'}`} /> {d.name}
+            </span>
+            <span style={{ fontSize: 13, whiteSpace: 'nowrap' }}>
+              <strong>{d.activeMinutesToday}m</strong>{' '}
+              <span className="muted">today</span>
+            </span>
+          </div>
+          {/* Bar is relative to the busiest device, so the comparison is the
+              point rather than the absolute number. */}
+          <div style={{ height: 6, background: 'var(--panel-2)', borderRadius: 3, marginTop: 4 }}>
+            <div
+              style={{
+                width: `${Math.round((d.activeMinutesToday / busiest) * 100)}%`,
+                height: '100%',
+                background: 'var(--accent)',
+                borderRadius: 3,
+                minWidth: d.activeMinutesToday ? 3 : 0,
+              }}
+            />
+          </div>
+          <div className="muted" style={{ fontSize: 11, marginTop: 3 }}>
+            {d.activeMinutesWeek}m this week · {d.lookupsToday.toLocaleString()} lookups today
+            {d.blockedToday > 0 && ` · ${d.blockedToday.toLocaleString()} blocked`}
+            {d.topDomain && ` · mostly ${d.topDomain}`}
+          </div>
+        </div>
+      ))}
+
+      <div className="muted" style={{ fontSize: 11, marginTop: 8, lineHeight: 1.5 }}>
+        Measured from DNS activity — minutes a device was actually using the
+        internet, and how many lookups it made. Not megabytes: the filter sees
+        which sites a device asks for, not how much it downloads, and this
+        router reports no per-device data totals.
+      </div>
     </div>
   );
 }

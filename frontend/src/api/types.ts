@@ -109,12 +109,31 @@ export interface AccessRequest {
   createdAt: string;
 }
 
+/**
+ * What a device did, measured — lookups and active minutes, never bytes. The
+ * filter sees DNS names, not traffic volume, and this router exposes no
+ * per-host counters, so megabytes would be a guess dressed as a number.
+ */
+export interface DeviceActivity {
+  deviceId: string;
+  name: string;
+  isOnline: boolean;
+  activeMinutesToday: number;
+  activeMinutesWeek: number;
+  lookupsToday: number;
+  lookupsWeek: number;
+  blockedToday: number;
+  topDomain: string | null;
+}
+
 export interface ProfileReport {
   profileId: string;
   name: string;
   today: { usedMinutes: number; limitMinutes: number | null; bonusMinutes: number };
   last7Days: Array<{ date: string; usedMinutes: number }>;
   topDomains: Array<{ domain: string; hits: number }>;
+  devices: DeviceActivity[];
+  deviceTotals: { activeMinutesToday: number; lookupsToday: number; blockedToday: number };
 }
 
 export interface SystemHealth {
