@@ -152,8 +152,18 @@ export async function resolveHostname(ip: string): Promise<string | null> {
   return reverseDnsName(ip);
 }
 
-/** True for addresses that are never a real, nameable device. */
-export function isNonDeviceAddress(ip: string): boolean {
+/**
+ * True for addresses that are never a real, nameable device.
+ *
+ * `lanIp` is this host's own LAN address; it is only consulted to decide
+ * whether a 172.16/12 address is the household's network or a container
+ * bridge. Defaulted from the environment so existing call sites are unchanged,
+ * and passable explicitly so it can be tested without touching globals.
+ */
+export function isNonDeviceAddress(
+  ip: string,
+  lanIp: string = process.env.ADGUARD_LAN_IP ?? '',
+): boolean {
   if (!ip) return true;
 
   if (ip.includes(':')) {
@@ -166,10 +176,22 @@ export function isNonDeviceAddress(ip: string): boolean {
   }
 
   if (ip === '255.255.255.255' || ip.endsWith('.255')) return true; // broadcast
-  const first = Number(ip.split('.')[0]);
+  const [first, second] = ip.split('.').map(Number);
   if (first >= 224 && first <= 239) return true; // multicast
   if (ip.startsWith('127.')) return true; // loopback
   if (ip.startsWith('169.254.')) return true; // link-local
+
+  // 172.16/12 is where Docker bridges and WSL's vEthernet live, and their
+  // addresses kept turning up in the device list as things a parent had to
+  // Forget by hand. It is also a legitimate private range some households run
+  // on, so it is not blanket-rejected: an address here counts as a real device
+  // only when it shares a /16 with this host's own LAN address. Docker's
+  // 172.18.x and WSL's 172.27.x fail that test against a 192.168.8.x LAN;
+  // a household genuinely on 172.20.x passes it.
+  if (first === 172 && second >= 16 && second <= 31) {
+    const [lanFirst, lanSecond] = lanIp.split('.').map(Number);
+    return !(lanFirst === first && lanSecond === second);
+  }
   return false;
 }
 

@@ -36,6 +36,12 @@ import { UpdateDeviceDto } from './dto/device.dto';
  * randomization, and raises alerts for brand-new / evasive devices. Called on a
  * schedule (SchedulerService) and on-demand from the controller.
  */
+/**
+ * How long an unnamed, MAC-less, unassigned address may go unseen before it is
+ * treated as a dead lease rather than a device.
+ */
+const GHOST_DAYS = 7;
+
 @Injectable()
 export class DevicesService implements OnModuleInit {
   private readonly logger = new Logger(DevicesService.name);
@@ -342,6 +348,57 @@ export class DevicesService implements OnModuleInit {
         if (row.id !== keeper.id && !row.profileId) stale.push(row);
       }
     }
+    // One row per MAC. A device that moves to a new lease is discovered at the
+    // new address while its old row lingers, so the list slowly fills with the
+    // same laptop at three addresses. Keeping the invested row and folding the
+    // current address into it means the parent never has to Forget by hand.
+    const byMac = new Map<string, Device[]>();
+    for (const row of all) {
+      if (dropped.has(row.id) || stale.includes(row)) continue;
+      if (!row.macAddress || row.macRandomized) continue; // randomized MACs are handled above
+      const key = row.macAddress.toLowerCase();
+      byMac.set(key, [...(byMac.get(key) ?? []), row]);
+    }
+    for (const [, group] of byMac) {
+      if (group.length < 2) continue;
+      const keeper =
+        group.find((row) => row.profileId) ??
+        group.reduce((a, b) => (a.createdAt <= b.createdAt ? a : b));
+      if (isPlaceholderName(keeper.name, keeper.ipAddress, keeper.vendor)) {
+        const named = group.find(
+          (row) =>
+            row.id !== keeper.id &&
+            !isPlaceholderName(row.name, row.ipAddress, row.vendor),
+        );
+        if (named) keeper.name = named.name;
+      }
+      // The address that is actually live wins; a stale row must not drag the
+      // keeper back to an address the device no longer holds.
+      const newest = group.reduce((a, b) =>
+        (a.lastSeenAt?.getTime() ?? 0) >= (b.lastSeenAt?.getTime() ?? 0) ? a : b,
+      );
+      keeper.ipAddress = newest.ipAddress;
+      keeper.isOnline = group.some((row) => row.isOnline);
+      keeper.lastSeenAt = newest.lastSeenAt;
+      await this.devices.save(keeper);
+      for (const row of group) {
+        if (row.id !== keeper.id && !row.profileId) stale.push(row);
+      }
+    }
+
+    // Ghosts: an address that was seen once, never carried a MAC, was never
+    // named or assigned, and has not appeared for a week. That is a lease that
+    // moved on, not a device — 192.168.8.103 outliving the laptop at .100.
+    const ghostCutoff = Date.now() - GHOST_DAYS * 24 * 60 * 60 * 1000;
+    for (const row of all) {
+      if (dropped.has(row.id) || stale.includes(row)) continue;
+      if (row.profileId || row.blocked || row.macAddress) continue;
+      if (!isPlaceholderName(row.name, row.ipAddress, row.vendor)) continue;
+      if (row.isOnline) continue;
+      if ((row.lastSeenAt?.getTime() ?? 0) >= ghostCutoff) continue;
+      stale.push(row);
+    }
+
     if (stale.length) {
       await this.devices.remove(stale);
       this.logger.log(`Device sync: pruned ${stale.length} non-device entries`);
