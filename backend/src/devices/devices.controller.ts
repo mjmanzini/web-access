@@ -9,11 +9,15 @@ import {
   Post,
 } from '@nestjs/common';
 import { DevicesService } from './devices.service';
+import { DeviceIdentityService } from '../portal/device-identity.service';
 import { UpdateDeviceDto } from './dto/device.dto';
 
 @Controller('devices')
 export class DevicesController {
-  constructor(private readonly devices: DevicesService) {}
+  constructor(
+    private readonly devices: DevicesService,
+    private readonly identity: DeviceIdentityService,
+  ) {}
 
   @Get()
   findAll() {
@@ -33,6 +37,28 @@ export class DevicesController {
   }
 
   /** Trigger an immediate device-discovery sync from the network layer. */
+  /**
+   * A one-time link that pairs the kid app on THIS device. The parent opens it
+   * on the child's tablet; it plants a signed cookie so the status page and its
+   * notifications know whose they are. Needed because neither transport can
+   * identify the device by address — the LAN path is NAT'd through Docker, and
+   * the HTTPS path arrives as Cloudflare.
+   */
+  @Post(':id/pair-link')
+  async pairLink(@Param('id') id: string): Promise<{ url: string; expiresInMinutes: number }> {
+    const device = await this.devices.findOne(id);
+    // Prefer the HTTPS origin when one is configured: a PWA and Web Push only
+    // work in a secure context, so pairing there is what makes the kid app a
+    // real app rather than a bookmark.
+    const base =
+      (process.env.KIDS_PUBLIC_URL || '').replace(/\/+$/, '') ||
+      `http://${process.env.PORTAL_HOSTNAME || 'homeguardian.co.za'}`;
+    return {
+      url: `${base}/pair?t=${this.identity.issuePairToken(device.id)}`,
+      expiresInMinutes: 15,
+    };
+  }
+
   @Post('sync')
   sync() {
     return this.devices.syncFromNetwork();

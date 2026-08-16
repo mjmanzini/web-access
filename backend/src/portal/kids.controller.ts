@@ -14,6 +14,7 @@ import { join } from 'node:path';
 import { IsObject, IsOptional, IsString } from 'class-validator';
 import { Public } from '../auth/public.decorator';
 import { PushService } from '../push/push.service';
+import { DeviceIdentityService } from './device-identity.service';
 import { PortalService } from './portal.service';
 
 class KidSubscribeDto {
@@ -40,16 +41,8 @@ export class KidsController {
   constructor(
     private readonly portal: PortalService,
     private readonly push: PushService,
+    private readonly identity: DeviceIdentityService,
   ) {}
-
-  private clientIp(req: Request): string {
-    const raw =
-      (req.headers['cf-connecting-ip'] as string) ||
-      (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
-      req.socket.remoteAddress ||
-      '';
-    return raw.replace(/^::ffff:/, '');
-  }
 
   @Public()
   @Get('manifest.webmanifest')
@@ -135,7 +128,7 @@ export class KidsController {
     deviceKnown: boolean;
     subscribed: boolean;
   }> {
-    const status = await this.portal.statusForIp(this.clientIp(req));
+    const status = await this.portal.statusForDevice(await this.identity.resolve(req));
     const deviceId = status.deviceId;
     return {
       enabled: this.push.isEnabled(),
@@ -157,7 +150,7 @@ export class KidsController {
     @Req() req: Request,
     @Body() dto: KidSubscribeDto,
   ): Promise<{ ok: boolean; reason?: string }> {
-    const status = await this.portal.statusForIp(this.clientIp(req));
+    const status = await this.portal.statusForDevice(await this.identity.resolve(req));
     if (!status.deviceId) return { ok: false, reason: 'device-not-recognised' };
 
     await this.push.subscribeDevice(status.deviceId, {
@@ -172,7 +165,7 @@ export class KidsController {
   @Public()
   @Post('test')
   async test(@Req() req: Request): Promise<{ delivered: number }> {
-    const status = await this.portal.statusForIp(this.clientIp(req));
+    const status = await this.portal.statusForDevice(await this.identity.resolve(req));
     if (!status.deviceId) return { delivered: 0 };
     const delivered = await this.push.sendToDevices([status.deviceId], {
       title: 'Notifications are on',

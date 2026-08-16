@@ -14,6 +14,7 @@ async function bootstrap() {
   app.setGlobalPrefix('api', {
     exclude: [
       'request',
+      'pair',
       'status',
       'api/status',
       '/',

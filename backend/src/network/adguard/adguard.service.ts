@@ -207,10 +207,26 @@ export class AdguardService implements NetworkProvider {
       .map((h) => h.trim())
       .filter(Boolean);
 
+    // The kid app's HTTPS origin, when one is configured. It is a real public
+    // hostname resolved through Cloudflare, so unlike the LAN portal it does
+    // NOT survive a catch-all block on its own — without this exception the
+    // child's app goes dark exactly when it is needed.
+    const kidsHost = (() => {
+      const url = this.config.get<string>('KIDS_PUBLIC_URL', '').trim();
+      if (!url) return null;
+      try {
+        return new URL(url).hostname || null;
+      } catch {
+        this.logger.warn(`KIDS_PUBLIC_URL is not a valid URL: ${url}`);
+        return null;
+      }
+    })();
+
     const rules: string[] = [];
     for (const id of unique) {
       rules.push(`||*^$client='${id}'`);
       if (portal) rules.push(`@@||${portal}^$client='${id}'`);
+      if (kidsHost) rules.push(`@@||${kidsHost}^$client='${id}'`);
       for (const host of pushHosts) rules.push(`@@||${host}^$client='${id}'`);
     }
     await this.setManagedBucket('__blocked__', rules);

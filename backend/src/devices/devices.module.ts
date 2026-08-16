@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { PortalModule } from '../portal/portal.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Device } from '../entities/device.entity';
 import { ActivityLog } from '../entities/activity-log.entity';
@@ -7,7 +8,12 @@ import { DevicesController } from './devices.controller';
 import { ProfilesModule } from '../profiles/profiles.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Device, ActivityLog]), ProfilesModule],
+  imports: [
+    TypeOrmModule.forFeature([Device, ActivityLog]),
+    ProfilesModule,
+    // For DeviceIdentityService, which mints the kid-app pairing links.
+    PortalModule,
+  ],
   controllers: [DevicesController],
   providers: [DevicesService],
   exports: [DevicesService],

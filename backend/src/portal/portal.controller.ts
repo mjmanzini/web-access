@@ -1,6 +1,7 @@
-import { Controller, Get, Header, Req } from '@nestjs/common';
-import { Request } from 'express';
+import { Controller, Get, Header, Query, Req, Res } from '@nestjs/common';
+import { Request, Response } from 'express';
 import { Public } from '../auth/public.decorator';
+import { DeviceIdentityService } from './device-identity.service';
 import { PortalService, PortalStatus } from './portal.service';
 
 /**
@@ -13,16 +14,43 @@ import { PortalService, PortalStatus } from './portal.service';
  */
 @Controller()
 export class PortalController {
-  constructor(private readonly portal: PortalService) {}
+  constructor(
+    private readonly portal: PortalService,
+    private readonly identity: DeviceIdentityService,
+  ) {}
 
-  /** Client IP: real address on the LAN, forwarded header behind the tunnel. */
-  private clientIp(req: Request): string {
-    const raw =
-      (req.headers['cf-connecting-ip'] as string) ||
-      (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
-      req.socket.remoteAddress ||
-      '';
-    return raw.replace(/^::ffff:/, ''); // strip IPv4-mapped IPv6 prefix
+  /**
+   * Pairing: a parent opens this one-time link on the child's device, which
+   * plants the signed cookie identifying it from then on.
+   *
+   * This exists because the source address cannot identify a device here —
+   * over the LAN every client arrives NAT'd to the Docker bridge, and over the
+   * HTTPS tunnel every client arrives as Cloudflare. Pairing is the only way
+   * the page can know whose status it is showing.
+   */
+  @Public()
+  @Get('pair')
+  async pair(
+    @Query('t') token: string,
+    @Req() req: Request,
+    @Res() res: Response,
+  ): Promise<void> {
+    const deviceId = this.identity.verifyPairToken(token ?? '');
+    if (!deviceId) {
+      res
+        .status(400)
+        .type('html')
+        .send(
+          expired(),
+        );
+      return;
+    }
+    // `secure` follows the origin: the LAN portal is plain HTTP, where a
+    // Secure cookie would be silently dropped.
+    const isHttps =
+      req.protocol === 'https' || req.headers['x-forwarded-proto'] === 'https';
+    res.setHeader('Set-Cookie', this.identity.cookieFor(deviceId, isHttps));
+    res.redirect(302, '/status');
   }
 
   @Public()
@@ -31,8 +59,33 @@ export class PortalController {
   @Header('Cache-Control', 'no-store')
   @Header('X-Frame-Options', 'DENY')
   @Header('Referrer-Policy', 'no-referrer')
-  async page(@Req() req: Request): Promise<string> {
-    return render(await this.portal.statusForIp(this.clientIp(req)));
+  async page(
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<string | undefined> {
+    // A PWA and Web Push need a secure context. On plain HTTP this page can
+    // only ever be a bookmark — Chrome will not register a service worker, so
+    // "install" produces a shortcut and push cannot subscribe at all. When an
+    // HTTPS origin is configured, send the child there instead of quietly
+    // serving them the version that can never work.
+    const https = this.kidsOrigin();
+    if (https && req.headers.host !== https.host) {
+      res.redirect(302, `${https.origin}/status`);
+      return undefined;
+    }
+    return render(await this.portal.statusForDevice(await this.identity.resolve(req)));
+  }
+
+  /** The configured HTTPS origin for the kid app, if any. */
+  private kidsOrigin(): { origin: string; host: string } | null {
+    const raw = (process.env.KIDS_PUBLIC_URL ?? '').trim().replace(/\/+$/, '');
+    if (!raw) return null;
+    try {
+      const u = new URL(raw);
+      return { origin: u.origin, host: u.host };
+    } catch {
+      return null;
+    }
   }
 
   /** JSON flavour, for the dashboard or a future kiosk view. */
@@ -40,7 +93,7 @@ export class PortalController {
   @Get('api/status')
   @Header('Cache-Control', 'no-store')
   async json(@Req() req: Request): Promise<PortalStatus> {
-    return this.portal.statusForIp(this.clientIp(req));
+    return this.portal.statusForDevice(await this.identity.resolve(req));
   }
 }
 
@@ -50,8 +103,17 @@ const ART: Record<string, { emoji: string; tint: string }> = {
   quota: { emoji: '⏳', tint: '#ffb64f' },
   paused: { emoji: '⏸️', tint: '#4f8cff' },
   blocked: { emoji: '⏸️', tint: '#4f8cff' },
+  unfiltered: { emoji: '📡', tint: '#ffb64f' },
   unknown: { emoji: '❓', tint: '#8a97b4' },
 };
+
+function expired(): string {
+  return `<!doctype html><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<body style="margin:0;min-height:100vh;display:grid;place-items:center;background:#0f1420;color:#e7ecf5;font:16px system-ui;text-align:center;padding:24px">
+<div><div style="font-size:56px">⏱️</div><h1 style="font-size:22px">This link has expired</h1>
+<p style="color:#b9c4d8">Ask a parent for a new pairing link.</p></div></body>`;
+}
 
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) =>
@@ -61,7 +123,7 @@ function escapeHtml(s: string): string {
 
 function render(s: PortalStatus): string {
   const art = ART[s.state] ?? ART.unknown;
-  const offline = s.state !== 'on' && s.state !== 'unknown';
+  const offline = s.state !== 'on' && s.state !== 'unknown' && s.state !== 'unfiltered';
   return `<!doctype html>
 <html lang="en">
 <head>

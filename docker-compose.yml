@@ -86,6 +86,10 @@ services:
       # an explicit allow rule for it, so a child can always see WHY their
       # device is offline.
       PORTAL_HOSTNAME: ${PORTAL_HOSTNAME:-}
+      # HTTPS origin for the kid app. A PWA install and Web Push both need a
+      # secure context, so the plain-HTTP LAN host can only ever be a bookmark.
+      # Blocked devices get an automatic allow rule for this hostname.
+      KIDS_PUBLIC_URL: ${KIDS_PUBLIC_URL:-}
       # Hosts a blocked device may still resolve, so the kid app can still be
       # told why it is blocked. Empty closes the hole (and the notifications).
       PUSH_ALLOW_DOMAINS: ${PUSH_ALLOW_DOMAINS:-mtalk.google.com,fcm.googleapis.com}
