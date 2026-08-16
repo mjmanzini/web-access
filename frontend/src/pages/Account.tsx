@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api/client';
 import Parents from '../components/Parents';
+import Storage from '../components/Storage';
 
 const MIN_LENGTH = 8; // matches the backend's ChangePasswordDto
 
@@ -267,6 +268,8 @@ export default function Account() {
       </div>
 
       <Parents />
+
+      <Storage />
     </>
   );
 }

@@ -11,6 +11,7 @@ import type {
   RouterStatus,
   Rule,
   Schedule,
+  StorageInfo,
   SystemHealth,
 } from './types';
 import { auth } from './auth';
@@ -163,6 +164,7 @@ export const api = {
     ),
   networkStatus: () => request<{ running: boolean; version: string | null }>('/network/status'),
   systemHealth: () => request<SystemHealth>('/system/health'),
+  storageInfo: () => request<StorageInfo>('/activity/storage'),
 
   // router + bandwidth
   bandwidth: () => request<BandwidthRow[]>('/bandwidth'),

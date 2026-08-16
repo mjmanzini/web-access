@@ -183,3 +183,16 @@ export interface InviteLink {
   url: string;
   expiresAt: string;
 }
+
+/** Disk usage and growth, so headroom is visible rather than guessed at. */
+export interface StorageInfo {
+  databaseBytes: number;
+  tables: Array<{ name: string; rows: number; bytes: number }>;
+  rawRows: number;
+  rawOldest: string | null;
+  rollupRows: number;
+  rowsPerDay: number;
+  bytesPerDay: number;
+  steadyStateBytes: number;
+  retention: { rawDays: number; rollupDays: number; eventDays: number };
+}

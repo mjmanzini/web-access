@@ -1,9 +1,10 @@
 import { Controller, Get, Post, Query } from '@nestjs/common';
 import { ActivityService } from './activity.service';
+import { RetentionService } from './retention.service';
 
 @Controller('activity')
 export class ActivityController {
-  constructor(private readonly activity: ActivityService) {}
+  constructor(private readonly activity: ActivityService, private readonly retention: RetentionService) {}
 
   /** Recent DNS activity, newest first; optionally just one device's. */
   @Get()
@@ -38,5 +39,10 @@ export class ActivityController {
   @Post('ingest')
   ingest() {
     return this.activity.ingest();
+  }
+  /** Disk usage, growth rate and headroom — see it rather than wonder. */
+  @Get('storage')
+  storage() {
+    return this.retention.storage();
   }
 }

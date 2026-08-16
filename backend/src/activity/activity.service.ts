@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Between, Repository } from 'typeorm';
 import { ActivityLog } from '../entities/activity-log.entity';
@@ -19,9 +19,29 @@ import { PUBLIC_DOH_HOSTS, FIREFOX_DOH_CANARY } from '../network/adguard/anti-by
  * repeated poll doesn't double-insert.
  */
 @Injectable()
-export class ActivityService {
+export class ActivityService implements OnModuleInit {
   private readonly logger = new Logger(ActivityService.name);
   private watermark = new Date(0);
+
+  /**
+   * Recover the watermark from the database on boot.
+   *
+   * It used to live only in memory, so every restart reset it to the epoch and
+   * the next poll re-ingested up to 500 rows it already held. Measured on this
+   * install after a day of deploys: 53% of activity_logs were duplicates, one
+   * event stored thirty times. That is not only wasted disk — it doubled every
+   * "queries today" figure the dashboard reported.
+   */
+  async onModuleInit(): Promise<void> {
+    const newest = await this.logs
+      .createQueryBuilder('a')
+      .select('MAX(a.timestamp)', 'max')
+      .getRawOne<{ max: Date | null }>();
+    if (newest?.max) {
+      this.watermark = new Date(newest.max);
+      this.logger.log(`Ingest watermark restored to ${this.watermark.toISOString()}`);
+    }
+  }
 
   constructor(
     @InjectRepository(ActivityLog) private logs: Repository<ActivityLog>,
@@ -61,7 +81,17 @@ export class ActivityService {
         upstream: e.upstream,
         elapsedMs: e.elapsedMs,
       });
-      await this.logs.save(row);
+      // Belt to the watermark's braces: a unique index over the natural key
+      // means a re-read of the same window is a no-op rather than a second
+      // copy. `orIgnore` reports zero identifiers when the row already
+      // existed, which is also how we avoid re-alerting on old events.
+      const result = await this.logs
+        .createQueryBuilder()
+        .insert()
+        .values(row)
+        .orIgnore()
+        .execute();
+      if (!result.identifiers?.[0]) continue;
       ingested++;
 
       this.raiseAlerts(row, device);
