@@ -4,7 +4,10 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AdminUser } from '../entities/admin-user.entity';
+import { AuthCode } from '../entities/auth-code.entity';
 import { AuthService } from './auth.service';
+import { AuthCodesService } from './auth-codes.service';
+import { MailerService } from './mailer.service';
 import { AuthController } from './auth.controller';
 import { UsersController } from './users.controller';
 import { JwtAuthGuard } from './jwt-auth.guard';
@@ -17,7 +20,7 @@ import { JwtAuthGuard } from './jwt-auth.guard';
 @Global()
 @Module({
   imports: [
-    TypeOrmModule.forFeature([AdminUser]),
+    TypeOrmModule.forFeature([AdminUser, AuthCode]),
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -28,7 +31,7 @@ import { JwtAuthGuard } from './jwt-auth.guard';
     }),
   ],
   controllers: [AuthController, UsersController],
-  providers: [AuthService, { provide: APP_GUARD, useClass: JwtAuthGuard }],
+  providers: [AuthService, { provide: APP_GUARD, useClass: JwtAuthGuard }, AuthCodesService, MailerService],
   exports: [JwtModule],
 })
 export class AuthModule {}

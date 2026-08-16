@@ -93,6 +93,10 @@ services:
       # Public origin of the parent dashboard, used to build invite/reset links
       # so they can be opened on another parent's phone.
       DASHBOARD_PUBLIC_URL: ${DASHBOARD_PUBLIC_URL:-}
+      # Outbound email (Resend). Unset = no mailer: the app still boots and the
+      # login page falls back to the admin-issued reset link.
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      MAIL_FROM: ${MAIL_FROM:-Home Guardian <guardian@send.mjmanziniholdings.co.za>}
       # Hosts a blocked device may still resolve, so the kid app can still be
       # told why it is blocked. Empty closes the hole (and the notifications).
       PUSH_ALLOW_DOMAINS: ${PUSH_ALLOW_DOMAINS:-mtalk.google.com,fcm.googleapis.com}

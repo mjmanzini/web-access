@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api } from '../api/client';
 import { auth } from '../api/auth';
+import ForgotPassword from './ForgotPassword';
 
 /** Full-screen login gate shown whenever there is no valid session. */
 export default function Login() {
@@ -8,6 +9,14 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [forgot, setForgot] = useState(false);
+  const [emailReset, setEmailReset] = useState(false);
+
+  // Only offer the emailed-code route when this deployment actually has a
+  // mailer; otherwise the fallback below is the honest instruction.
+  useEffect(() => {
+    api.authCapabilities().then((c) => setEmailReset(c.emailReset)).catch(() => setEmailReset(false));
+  }, []);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -22,6 +31,8 @@ export default function Login() {
       setBusy(false);
     }
   };
+
+  if (forgot) return <ForgotPassword onBack={() => setForgot(false)} />;
 
   return (
     <div style={{ display: 'grid', placeItems: 'center', minHeight: '100vh' }}>

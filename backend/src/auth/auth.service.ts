@@ -13,6 +13,8 @@ import { Repository } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
 import { createHash, randomBytes } from 'node:crypto';
 import { AdminUser } from '../entities/admin-user.entity';
+import { AuthCodesService } from './auth-codes.service';
+import { MailerService } from './mailer.service';
 
 /** How long an invite / reset link stays usable. */
 const INVITE_TTL_MS = 7 * 24 * 60 * 60_000;
@@ -27,6 +29,8 @@ export class AuthService implements OnModuleInit {
     @InjectRepository(AdminUser) private users: Repository<AdminUser>,
     private jwt: JwtService,
     private config: ConfigService,
+    private codes: AuthCodesService,
+    private mailer: MailerService,
   ) {}
 
   /** Seed the first admin from env if no admin exists yet. */
@@ -169,6 +173,36 @@ export class AuthService implements OnModuleInit {
     return { token: await this.signFor(user) };
   }
 
+  /**
+   * Set the contact details on an account. Email matters: without one, an
+   * account cannot be recovered by code — the seeded admin starts with none.
+   */
+  async updateUser(
+    id: string,
+    patch: { displayName?: string | null; email?: string | null },
+  ): Promise<void> {
+    const user = await this.users.findOne({ where: { id } });
+    if (!user) throw new NotFoundException('No such account');
+
+    if (patch.email !== undefined) {
+      const email = patch.email?.trim().toLowerCase() || null;
+      if (email) {
+        const clash = await this.users
+          .createQueryBuilder('u')
+          .where('LOWER(u.email) = :email AND u.id != :id', { email, id })
+          .getOne();
+        if (clash) {
+          throw new BadRequestException('Another account already uses that address.');
+        }
+      }
+      user.email = email;
+    }
+    if (patch.displayName !== undefined) {
+      user.displayName = patch.displayName?.trim() || null;
+    }
+    await this.users.save(user);
+  }
+
   async deleteUser(id: string, actingUserId: string): Promise<void> {
     if (id === actingUserId) {
       throw new BadRequestException('You cannot remove your own account.');
@@ -191,6 +225,84 @@ export class AuthService implements OnModuleInit {
       throw new UnauthorizedException('This link has expired. Ask for a new one.');
     }
     return user;
+  }
+
+  // ---- emailed reset codes ------------------------------------------
+
+  /**
+   * Start a password reset. ALWAYS reports the same thing to the caller.
+   *
+   * Whether the address is unknown, belongs to an account with no email, or is
+   * rate-limited, the answer is identical — anything else turns this endpoint
+   * into a way to ask "does this person have an account here?", which is the
+   * classic leak in exactly this flow.
+   */
+  async requestPasswordReset(email: string, ip: string | null): Promise<void> {
+    const normalized = (email ?? '').trim().toLowerCase();
+    if (!normalized) return;
+
+    const user = await this.users
+      .createQueryBuilder('u')
+      .where('LOWER(u.email) = :email', { email: normalized })
+      .getOne();
+    if (!user) {
+      this.logger.log('reset requested for an address with no account');
+      return;
+    }
+
+    const code = await this.codes.issue(user.id, 'password_reset', ip);
+    if (!code) return; // rate-limited; the caller still says "check your email"
+
+    const sent = await this.mailer.send(
+      normalized,
+      'Your Home Guardian reset code',
+      [
+        `Your code is ${code}`,
+        '',
+        'It works once and expires in 10 minutes.',
+        'If you did not ask for this, you can ignore this email — nothing has changed.',
+      ].join('\n'),
+      `<p style="font:16px system-ui">Your Home Guardian reset code is:</p>
+       <p style="font:700 32px/1.2 system-ui;letter-spacing:6px">${code}</p>
+       <p style="font:14px system-ui;color:#555">It works once and expires in 10 minutes.
+       If you did not ask for this, ignore this email — nothing has changed.</p>`,
+    );
+    if (!sent) this.logger.warn('reset code generated but the email could not be sent');
+  }
+
+  /** Finish a reset: verify the code, set the password, sign them in. */
+  async resetPasswordWithCode(
+    email: string,
+    code: string,
+    newPassword: string,
+    ip: string | null,
+  ): Promise<{ token: string }> {
+    if (!newPassword || newPassword.length < 8) {
+      throw new BadRequestException('Password must be at least 8 characters.');
+    }
+    const normalized = (email ?? '').trim().toLowerCase();
+    const user = await this.users
+      .createQueryBuilder('u')
+      .where('LOWER(u.email) = :email', { email: normalized })
+      .getOne();
+    // Same vague failure as a wrong code: an unknown address must not be
+    // distinguishable here either.
+    if (!user) throw new BadRequestException('That code is not valid. Ask for a new one.');
+
+    await this.codes.consume(user.id, 'password_reset', code, ip);
+
+    user.passwordHash = await bcrypt.hash(newPassword, 12);
+    // A reset also settles any outstanding invite link for this account.
+    user.inviteTokenHash = null;
+    user.inviteExpiresAt = null;
+    await this.users.save(user);
+    this.logger.log(`Password reset by code for "${user.username}"`);
+    return { token: await this.signFor(user) };
+  }
+
+  /** Can this account be recovered by email at all? Used by the UI copy. */
+  mailEnabled(): boolean {
+    return this.mailer.isEnabled();
   }
 
   async changePassword(

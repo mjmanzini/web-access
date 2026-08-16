@@ -4,14 +4,14 @@ import type { ParentAccount } from '../api/types';
 import { ErrorNotice, Skeleton, useConfirm } from './ui';
 
 /**
- * Parent accounts — add a second parent, and hand out reset links.
+ * Parent accounts — add a parent, set the address that receives reset codes,
+ * and hand out one-time links.
  *
- * The "forgot password" story lives here rather than in an email. This stack
- * has no mailer, and adding one would buy less than it appears: Cloudflare
- * Access already gates this whole origin, so anyone who can reach the login
- * page has just proven control of an approved email address. A link handed over
- * by the other parent carries the same assurance with no third party, no API
- * key to leak, and it still works when the internet is down.
+ * Two recovery routes on purpose. A parent who knows their email uses the
+ * emailed code from the login page and needs nobody. The admin-issued link
+ * stays as the fallback for an account with no email, and for the day the
+ * mailer or the internet is down — which, for something that controls the
+ * household's internet, is exactly when you need to get in.
  */
 export default function Parents() {
   const [me, setMe] = useState<{ id: string } | null>(null);
@@ -73,6 +73,16 @@ export default function Parents() {
       setLink({ label: a.displayName || a.username, url: out.url, expiresAt: out.expiresAt });
     });
 
+  /**
+   * Without an email an account cannot be recovered by code, and the seeded
+   * admin has none — so this has to be editable, not just set at creation.
+   */
+  const setEmailFor = (a: ParentAccount) => {
+    const next = window.prompt(`Email for ${a.displayName || a.username}`, a.email ?? '');
+    if (next === null) return;
+    return run(`email:${a.id}`, () => api.updateParent(a.id, { email: next.trim() }));
+  };
+
   const remove = (a: ParentAccount) =>
     run(`del:${a.id}`, async () => {
       const ok = await confirm({
@@ -119,13 +129,21 @@ export default function Parents() {
                 </div>
                 <div className="muted" style={{ fontSize: 11, overflowWrap: 'anywhere' }}>
                   {a.username}
-                  {a.email ? ` · ${a.email}` : ''}
+                  {a.email ? ` · ${a.email}` : ' · no email — cannot reset by code'}
                   {!a.hasPassword ? ' · no password set yet' : ''}
                   {a.pendingInvite ? ' · link outstanding' : ''}
                 </div>
               </div>
-              {iAmAdmin && (
+              {(iAmAdmin || a.id === me?.id) && (
                 <div className="row" style={{ gap: 6 }}>
+                  <button
+                    className="ghost"
+                    onClick={() => setEmailFor(a)}
+                    disabled={busyKey === `email:${a.id}`}
+                    title="Set the address that receives reset codes"
+                  >
+                    {busyKey === `email:${a.id}` ? '…' : a.email ? 'Email' : 'Add email'}
+                  </button>
                   <button
                     className="ghost"
                     onClick={() => reset(a)}

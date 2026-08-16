@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Delete,
+  Patch,
   ForbiddenException,
   Get,
   Param,
@@ -18,6 +19,11 @@ class CreateUserDto {
   @IsOptional() @IsString() displayName?: string;
   @IsOptional() @IsEmail() email?: string;
   @IsOptional() @IsIn(['admin', 'parent']) role?: 'admin' | 'parent';
+}
+
+class UpdateUserDto {
+  @IsOptional() @IsString() displayName?: string;
+  @IsOptional() @IsEmail() email?: string;
 }
 
 class RedeemDto {
@@ -59,6 +65,18 @@ export class UsersController {
     await this.requireAdmin(req);
     const out = await this.auth.issueInvite(id);
     return this.linkFor(out.token, out.expiresAt);
+  }
+
+  /**
+   * Edit a parent's details. An admin may edit anyone; anyone may edit their
+   * own — otherwise a parent could never add the email that makes their own
+   * account recoverable.
+   */
+  @Patch(':id')
+  async update(@Req() req: Authed, @Param('id') id: string, @Body() dto: UpdateUserDto) {
+    if (req.user?.sub !== id) await this.requireAdmin(req);
+    await this.auth.updateUser(id, dto);
+    return { ok: true };
   }
 
   @Delete(':id')

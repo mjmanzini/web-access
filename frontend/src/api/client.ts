@@ -55,6 +55,18 @@ export const api = {
       body: JSON.stringify({ username, password }),
     }),
   me: () => request<{ id: string; username: string }>('/auth/me'),
+  /** Always succeeds — the answer is identical whether the account exists. */
+  forgotPassword: (email: string) =>
+    request<{ ok: true; message: string }>('/auth/forgot-password', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    }),
+  resetPassword: (email: string, code: string, newPassword: string) =>
+    request<{ token: string }>('/auth/reset-password', {
+      method: 'POST',
+      body: JSON.stringify({ email, code, newPassword }),
+    }),
+  authCapabilities: () => request<{ emailReset: boolean }>('/auth/capabilities'),
 
   // parent accounts
   parentAccounts: () => request<ParentAccount[]>('/users'),
@@ -62,6 +74,8 @@ export const api = {
     request<InviteLink & { id: string }>('/users', { method: 'POST', body: JSON.stringify(body) }),
   resetLinkFor: (id: string) =>
     request<InviteLink>(`/users/${id}/reset-link`, { method: 'POST' }),
+  updateParent: (id: string, body: { displayName?: string; email?: string }) =>
+    request<{ ok: true }>(`/users/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   deleteParent: (id: string) => request<{ ok: true }>(`/users/${id}`, { method: 'DELETE' }),
   inviteHolder: (token: string) =>
     request<{ username: string; displayName: string | null }>(`/users/invite/${token}`),
