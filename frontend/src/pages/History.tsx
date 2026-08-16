@@ -81,9 +81,14 @@ export default function History() {
 
       <Async state={history} skeleton={<Skeleton rows={5} height={44} />}>
         {(h) => {
-          const shown = h.periods;
-          const busiest = Math.max(1, ...shown.map((p) => p.lookups));
-          const anyData = shown.some((p) => p.lookups > 0);
+          // Never trust the shape. This page crashed on a phone with "Cannot
+          // read properties of undefined (reading 'map')" because a stale route
+          // returned an array where an object was expected, so `periods` was
+          // simply absent. A wrong shape should degrade to "nothing to show",
+          // not take the screen down.
+          const shown = Array.isArray(h?.periods) ? h.periods : [];
+          const busiest = Math.max(1, ...shown.map((p) => p.lookups ?? 0));
+          const anyData = shown.some((p) => (p.lookups ?? 0) > 0);
 
           if (!anyData) {
             return (
@@ -126,7 +131,7 @@ export default function History() {
                   >
                     <div
                       style={{
-                        width: `${Math.round((p.lookups / busiest) * 100)}%`,
+                        width: `${Math.round(((p.lookups ?? 0) / busiest) * 100)}%`,
                         height: '100%',
                         background: 'var(--accent)',
                         borderRadius: 4,
@@ -136,22 +141,22 @@ export default function History() {
                   </div>
 
                   <div className="muted" style={{ fontSize: 12 }}>
-                    {p.lookups.toLocaleString()} requests
-                    {p.blocked > 0 && ` · ${p.blocked.toLocaleString()} blocked`}
+                    {(p.lookups ?? 0).toLocaleString()} requests
+                    {(p.blocked ?? 0) > 0 && ` · ${p.blocked.toLocaleString()} blocked`}
                     {p.source === 'summary' && ' · from daily summary'}
                     {p.source === 'none' && ' · nothing recorded'}
                   </div>
 
-                  {p.topDomains.length > 0 && (
+                  {(p.topDomains ?? []).length > 0 && (
                     <div className="muted" style={{ fontSize: 12, marginTop: 6, overflowWrap: 'anywhere' }}>
-                      Top: {p.topDomains.map((d) => `${d.domain} (${d.hits})`).join(' · ')}
+                      Top: {(p.topDomains ?? []).map((d) => `${d.domain} (${d.hits})`).join(' · ')}
                     </div>
                   )}
                 </div>
               ))}
 
               <div className="muted" style={{ fontSize: 11, lineHeight: 1.6, marginTop: 4 }}>
-                Exact per-request detail is kept for {h.rawWindowDays} days. Older periods
+                Exact per-request detail is kept for {h.rawWindowDays ?? 14} days. Older periods
                 are drawn from nightly summaries — the totals and top sites remain, the
                 individual lookups do not.
               </div>
