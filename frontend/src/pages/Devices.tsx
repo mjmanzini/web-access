@@ -242,7 +242,13 @@ export default function Devices() {
                           onClick={() => showPair(d)}
                           title="Set up the kid app on this device"
                         >
-                          {pair?.id === d.id ? 'Hide pairing' : '📱 Pair kid app'}
+                          {pair?.id === d.id ? (
+                          'Hide pairing'
+                        ) : (
+                          <>
+                            📱 Pair: <span className="pair-target">{d.name}</span>
+                          </>
+                        )}
                         </button>
                       </>
                     )}
@@ -327,7 +333,13 @@ export default function Devices() {
                         operates, and on a phone the two are never on screen
                         together — the table scrolls sideways between them. */}
                     <button className="ghost" onClick={() => showPair(d)}>
-                      {pair?.id === d.id ? 'Hide pairing' : '📱 Pair kid app'}
+                      {pair?.id === d.id ? (
+                        'Hide pairing'
+                      ) : (
+                        <>
+                          📱 Pair: <span className="pair-target">{d.name}</span>
+                        </>
+                      )}
                     </button>
                     <button className="ghost" onClick={() => forget(d)} title="Remove this entry">Forget</button>
                     {/* When the profile is what's blocking, offer the action

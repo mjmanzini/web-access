@@ -185,3 +185,13 @@ input, select {
 @media (max-width: 768px) {
   .pair-panel { max-width: calc(100vw - 56px); }
 }
+
+/* The pair button carries its row's device name, because in the actions
+   column the name column has been scrolled off-screen — that ambiguity is how
+   a tablet once got paired as the laptop. Long names truncate rather than
+   stretching the row or wrapping the button. */
+.pair-target {
+  display: inline-block; max-width: 20ch; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom;
+}
+@media (max-width: 768px) { .pair-target { max-width: 15ch; } }
