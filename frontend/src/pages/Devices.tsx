@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useState } from 'react';
+import qrcode from 'qrcode-generator';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import type { BandwidthRow, Device, DnsSetup, Profile } from '../api/types';
@@ -25,6 +26,10 @@ export default function Devices() {
   const [bandwidth, setBandwidth] = useState<Record<string, BandwidthRow>>({});
   const [busy, setBusy] = useState(false);
   const [setup, setSetup] = useState<{ id: string; data: DnsSetup } | null>(null);
+  const [pair, setPair] = useState<
+    { id: string; name: string; url: string; expiresInMinutes: number } | null
+  >(null);
+  const [pairError, setPairError] = useState<string | null>(null);
   // Inline rename: which row is being edited, and its pending text.
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
@@ -108,6 +113,19 @@ export default function Devices() {
     await api.deleteDevice(d.id);
     load();
   };
+  /** Mint a fresh pairing link for this device and reveal it. */
+  const showPair = async (d: Device) => {
+    if (pair?.id === d.id) return setPair(null);
+    setPairError(null);
+    try {
+      const out = await api.pairLink(d.id);
+      setPair({ id: d.id, name: d.name, ...out });
+    } catch (e) {
+      setPair(null);
+      setPairError(`Could not create a pairing link for ${d.name}: ${(e as Error).message}`);
+    }
+  };
+
   const showSetup = async (id: string) => {
     if (setup?.id === id) return setSetup(null);
     const data = await api.dnsSetup(id);
@@ -172,6 +190,7 @@ export default function Devices() {
       </div>
 
       {error && <div className="badge danger" style={{ marginBottom: 12, display: "block" }}>{error}</div>}
+      {pairError && <div className="badge danger" style={{ marginBottom: 12, display: "block" }}>{pairError}</div>}
 
       <div className="card">
         <table>
@@ -213,6 +232,18 @@ export default function Devices() {
                           {d.ipAddress}
                           {d.vendor && ` · ${d.vendor}`}
                         </div>
+                        {/* Deliberately in the FIRST column. The other actions
+                            sit in the last one, and on a phone this table
+                            scrolls sideways — anything over there is
+                            effectively invisible, which is exactly how this
+                            action got reported as "not on the dashboard". */}
+                        <button
+                          className="linkish"
+                          onClick={() => showPair(d)}
+                          title="Set up the kid app on this device"
+                        >
+                          {pair?.id === d.id ? 'Hide pairing' : '📱 Pair kid app'}
+                        </button>
                       </>
                     )}
                   </td>
@@ -313,6 +344,13 @@ export default function Devices() {
                     </button>
                   </td>
                 </tr>
+                {pair?.id === d.id && (
+                  <tr>
+                    <td colSpan={6} style={{ background: 'var(--panel-2)' }}>
+                      <PairPanel pair={pair} />
+                    </td>
+                  </tr>
+                )}
                 {setup?.id === d.id && (
                   <tr>
                     <td colSpan={6} style={{ background: 'var(--panel-2)' }}>
@@ -362,5 +400,111 @@ function Field({ label, value }: { label: string; value: string }) {
       <span className="muted" style={{ fontSize: 12, width: 210 }}>{label}</span>
       <code style={{ userSelect: 'all' }}>{value}</code>
     </div>
+  );
+}
+
+/**
+ * Everything needed to get the kid app onto a child's device, from a parent's
+ * phone. The link is one-time and short-lived, so it is minted on demand rather
+ * than shown by default.
+ *
+ * The QR code carries the whole handoff: the parent is holding their phone, the
+ * link has to end up in a browser on a different device, and reading a signed
+ * token aloud is not a thing anyone will do twice.
+ */
+function PairPanel({
+  pair,
+}: {
+  pair: { id: string; name: string; url: string; expiresInMinutes: number };
+}) {
+  const [copied, setCopied] = useState(false);
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(pair.url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Clipboard is blocked on insecure origins and in some mobile browsers.
+      // The URL is on screen and selectable, so this is a nicety, not the path.
+      setCopied(false);
+    }
+  };
+
+  return (
+    <div className="grid pair-panel" style={{ gap: 10, padding: '6px 0' }}>
+      <div style={{ fontSize: 13 }}>
+        <strong>Set up the kid app on {pair.name}</strong>
+      </div>
+      <ol className="muted" style={{ fontSize: 12, margin: 0, paddingLeft: 18, lineHeight: 1.7 }}>
+        <li>On {pair.name}, open Chrome and scan this code (or paste the link).</li>
+        <li>The page should then show <em>{pair.name}</em> — that means it worked.</li>
+        <li>Chrome menu ⋮ → <strong>Add to Home screen</strong> → Install.</li>
+        <li>Open the app → <strong>Tell me before bedtime</strong> → allow notifications.</li>
+      </ol>
+
+      <QrCode value={pair.url} />
+
+      <div className="row" style={{ gap: 8 }}>
+        <code
+          style={{
+            flex: '1 1 200px',
+            minWidth: 0,
+            overflowWrap: 'anywhere',
+            userSelect: 'all',
+            fontSize: 11,
+          }}
+        >
+          {pair.url}
+        </code>
+        <button className="ghost" onClick={copy}>
+          {copied ? 'Copied' : 'Copy link'}
+        </button>
+      </div>
+      <div className="muted" style={{ fontSize: 11 }}>
+        Expires in {pair.expiresInMinutes} minutes. Pair while the device still has
+        internet — afterwards the app keeps working even when it is blocked.
+      </div>
+    </div>
+  );
+}
+
+/**
+ * QR rendered as inline SVG rects — no canvas, no network, no image host, so it
+ * works on a phone behind Access and survives being printed or screenshotted.
+ */
+function QrCode({ value }: { value: string }) {
+  const qr = qrcode(0, 'L'); // auto-size, low ECC: plenty for a short-lived URL
+  qr.addData(value);
+  qr.make();
+  const count = qr.getModuleCount();
+  const quiet = 2;
+  const size = count + quiet * 2;
+
+  const rects: JSX.Element[] = [];
+  for (let r = 0; r < count; r++) {
+    for (let c = 0; c < count; c++) {
+      if (qr.isDark(r, c)) {
+        rects.push(<rect key={`${r}-${c}`} x={c + quiet} y={r + quiet} width={1} height={1} />);
+      }
+    }
+  }
+
+  return (
+    <svg
+      viewBox={`0 0 ${size} ${size}`}
+      role="img"
+      aria-label="Pairing QR code"
+      style={{
+        width: 'min(230px, 60vw)',
+        height: 'auto',
+        background: '#fff',
+        borderRadius: 8,
+        padding: 6,
+      }}
+      shapeRendering="crispEdges"
+    >
+      <g fill="#000">{rects}</g>
+    </svg>
   );
 }

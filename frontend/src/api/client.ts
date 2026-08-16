@@ -109,6 +109,9 @@ export const api = {
   // devices
   devices: () => request<Device[]>('/devices'),
   dnsSetup: (id: string) => request<DnsSetup>(`/devices/${id}/dns-setup`),
+  /** Mint a one-time link that pairs the kid app on this device. */
+  pairLink: (id: string) =>
+    request<{ url: string; expiresInMinutes: number }>(`/devices/${id}/pair-link`, { method: "POST" }),
   syncDevices: () => request<{ discovered: number; created: number }>('/devices/sync', { method: 'POST' }),
   updateDevice: (id: string, body: Partial<Device>) =>
     request<Device>(`/devices/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),

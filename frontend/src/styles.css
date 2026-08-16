@@ -166,3 +166,22 @@ input, select {
   .cards { grid-template-columns: 1fr 1fr; }
   .stat { font-size: 20px; }
 }
+
+/* A low-weight inline action inside a table cell — visible without being a
+   third competing button. Sized for a thumb at mobile widths. */
+.linkish {
+  background: none; border: 0; padding: 2px 0; margin-top: 4px;
+  color: var(--accent); font-size: 12px; font-weight: 600; cursor: pointer;
+  min-height: 0; text-align: left;
+}
+.linkish:hover { text-decoration: underline; }
+@media (max-width: 768px) { .linkish { min-height: 32px; font-size: 13px; } }
+
+/* The devices table is min-width 520px and scrolls sideways on a phone, so a
+   panel inside a cell inherits that width and pushes its own controls out of
+   view. Pin the pairing panel to the viewport instead — the QR, the link and
+   the copy button all have to be reachable without discovering a side-scroll. */
+.pair-panel { max-width: 100%; }
+@media (max-width: 768px) {
+  .pair-panel { max-width: calc(100vw - 56px); }
+}
