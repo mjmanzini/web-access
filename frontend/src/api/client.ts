@@ -80,6 +80,8 @@ export const api = {
       body: JSON.stringify({ minutes }),
     }),
   report: (id: string) => request<ProfileReport>(`/reports/profile/${id}`),
+  /** Every profile's report in one call — powers the at-a-glance usage line. */
+  reports: () => request<ProfileReport[]>('/reports'),
 
   // web push
   pushConfig: () => request<{ enabled: boolean; publicKey: string | null; devices: number }>('/push/config'),

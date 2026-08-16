@@ -12,6 +12,7 @@ export default function Profiles() {
   const [busy, setBusy] = useState(false);
   const [loadingReport, setLoadingReport] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [usage, setUsage] = useState<Record<string, ProfileReport> | null>(null);
   const confirm = useConfirm();
   const [error, setError] = useState<string | null>(null);
 
@@ -20,6 +21,12 @@ export default function Profiles() {
       .then(setProfiles)
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
+    // Usage for every card in one call. Deliberately not fatal: if this fails
+    // the cards still render with their controls, just without the summary
+    // line — the page's job is to control the internet, not to report on it.
+    api.reports()
+      .then((rows) => setUsage(Object.fromEntries(rows.map((r) => [r.profileId, r]))))
+      .catch(() => setUsage({}));
   };
   useEffect(load, []);
 
@@ -199,6 +206,11 @@ export default function Profiles() {
             >
               {effectiveSummary(p)}
             </div>
+
+            {/* Usage where it was asked for: on the card, without a tap. The
+                full per-device breakdown stays behind Report — this is the
+                answer to "how much today", not the analysis. */}
+            <UsageLine report={usage?.[p.id]} loading={usage === null} />
 
             <div className="grid" style={{ gap: 8, marginBottom: 12 }}>
               <Toggle
@@ -588,6 +600,61 @@ function DeviceUsage({ data }: { data: ProfileReport }) {
         which sites a device asks for, not how much it downloads, and this
         router reports no per-device data totals.
       </div>
+    </div>
+  );
+}
+
+/**
+ * One line of usage, always visible on the card.
+ *
+ * The full breakdown lives behind the Report button, which turned out to be
+ * three interactions deep — past the switches, the categories, the limit and
+ * the whole bedtime section — so "per-device usage under the profile" was
+ * shipped and effectively invisible. This is the at-a-glance answer; Report is
+ * still where the detail is.
+ */
+function UsageLine({ report, loading }: { report?: ProfileReport; loading: boolean }) {
+  if (loading) {
+    return (
+      <div style={{ marginBottom: 12 }}>
+        <Skeleton rows={1} height={13} />
+      </div>
+    );
+  }
+  if (!report) return null;
+
+  const devices = report.devices ?? [];
+  if (!devices.length) {
+    return (
+      <div className="muted" style={{ fontSize: 12, marginBottom: 12 }}>
+        No devices assigned yet — usage appears once one is.
+      </div>
+    );
+  }
+
+  // Busiest first: with several devices the card should lead with the one
+  // actually being used, not whichever the database returned first.
+  const sorted = [...devices].sort((a, b) => b.activeMinutesToday - a.activeMinutesToday);
+  const shown = sorted.slice(0, 2);
+  const rest = sorted.length - shown.length;
+
+  return (
+    <div style={{ fontSize: 12, marginBottom: 12, lineHeight: 1.6 }}>
+      {shown.map((d) => (
+        <div key={d.deviceId} style={{ overflowWrap: 'anywhere' }}>
+          <span className={`dot ${d.isOnline ? 'on' : 'off'}`} />{' '}
+          <strong>{d.name}</strong>{' '}
+          <span className="muted">
+            · {d.activeMinutesToday}m today
+            {d.blockedToday > 0 && ` · ${d.blockedToday.toLocaleString()} blocked`}
+          </span>
+        </div>
+      ))}
+      {rest > 0 && (
+        <div className="muted">
+          + {rest} more device{rest === 1 ? '' : 's'} · see Report
+        </div>
+      )}
     </div>
   );
 }
