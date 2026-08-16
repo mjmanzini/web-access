@@ -43,17 +43,44 @@ export class RetentionService {
 
     // 1) Aggregate old raw rows into daily rollups (add to existing counts).
     await this.dataSource.query(
-      `INSERT INTO activity_rollups (date, "profileId", domain, action, hits)
+      `INSERT INTO activity_rollups (date, "profileId", "deviceId", domain, action, hits)
        SELECT (timestamp AT TIME ZONE 'UTC')::date AS date,
               COALESCE("profileId"::text, '')       AS "profileId",
+              COALESCE("deviceId"::text, '')        AS "deviceId",
               domain,
               action,
               COUNT(*)::int                          AS hits
        FROM activity_logs
        WHERE timestamp < $1
-       GROUP BY 1, 2, 3, 4
-       ON CONFLICT (date, "profileId", domain, action)
+       GROUP BY 1, 2, 3, 4, 5
+       ON CONFLICT (date, "profileId", "deviceId", domain, action)
        DO UPDATE SET hits = activity_rollups.hits + EXCLUDED.hits`,
+      [cutoff],
+    );
+
+    // 1b) Distil the numbers that grouping by domain can never reconstruct.
+    //     Active minutes come from the spacing of individual timestamps, which
+    //     is precisely what the prune below destroys — so capture them now.
+    await this.dataSource.query(
+      `INSERT INTO device_daily (date, "deviceId", "deviceName", "profileId",
+                                 "activeMinutes", lookups, blocked)
+       SELECT (a.timestamp AT TIME ZONE 'UTC')::date                       AS date,
+              a."deviceId"::text                                            AS "deviceId",
+              MAX(d.name)                                                   AS "deviceName",
+              MAX(a."profileId"::text)                                      AS "profileId",
+              (COUNT(DISTINCT FLOOR(EXTRACT(EPOCH FROM a.timestamp) / 300)) * 5)::int
+                                                                            AS "activeMinutes",
+              COUNT(*)::int                                                 AS lookups,
+              COUNT(*) FILTER (WHERE a.action = 'blocked')::int             AS blocked
+       FROM activity_logs a
+       LEFT JOIN devices d ON d.id = a."deviceId"
+       WHERE a.timestamp < $1 AND a."deviceId" IS NOT NULL
+       GROUP BY 1, 2
+       ON CONFLICT (date, "deviceId") DO UPDATE
+         SET "activeMinutes" = GREATEST(device_daily."activeMinutes", EXCLUDED."activeMinutes"),
+             lookups         = device_daily.lookups + EXCLUDED.lookups,
+             blocked         = device_daily.blocked + EXCLUDED.blocked,
+             "deviceName"    = COALESCE(EXCLUDED."deviceName", device_daily."deviceName")`,
       [cutoff],
     );
 

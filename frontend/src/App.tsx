@@ -5,6 +5,7 @@ import Devices from './pages/Devices';
 import Profiles from './pages/Profiles';
 import Rules from './pages/Rules';
 import Activity from './pages/Activity';
+import History from './pages/History';
 import Requests from './pages/Requests';
 import Login from './pages/Login';
 import Invite from './pages/Invite';
@@ -20,6 +21,7 @@ const NAV = [
   { to: '/rules', label: 'Rules' },
   { to: '/requests', label: 'Requests' },
   { to: '/activity', label: 'Activity' },
+  { to: '/history', label: 'History' },
   { to: '/account', label: 'Account' },
 ];
 
@@ -77,6 +79,7 @@ export default function App() {
           <Route path="/rules" element={<Rules />} />
           <Route path="/requests" element={<Requests />} />
           <Route path="/activity" element={<Activity />} />
+          <Route path="/history" element={<History />} />
           <Route path="/account" element={<Account />} />
         </Routes>
         </ErrorBoundary>

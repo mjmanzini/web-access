@@ -18,6 +18,13 @@ export class ActivityRollup {
   @PrimaryColumn({ default: '' })
   profileId: string;
 
+  /**
+   * Also text-with-empty-default, for the same conflict-key reason. Added so
+   * "this device, last March" stays answerable once the raw rows are gone.
+   */
+  @PrimaryColumn({ default: '' })
+  deviceId: string;
+
   @PrimaryColumn()
   domain: string;
 

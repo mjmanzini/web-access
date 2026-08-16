@@ -196,3 +196,23 @@ export interface StorageInfo {
   steadyStateBytes: number;
   retention: { rawDays: number; rollupDays: number; eventDays: number };
 }
+
+/** One period of the audit history. */
+export interface HistoryPeriod {
+  start: string;
+  label: string;
+  /** Null when the period predates any record, or came from a summary with none. */
+  activeMinutes: number | null;
+  lookups: number;
+  blocked: number;
+  topDomains: Array<{ domain: string; hits: number }>;
+  /** 'raw' = exact detail, 'summary' = aged into nightly rollups, 'none' = nothing. */
+  source: 'raw' | 'summary' | 'none';
+}
+
+export interface HistoryResult {
+  granularity: 'daily' | 'weekly' | 'monthly';
+  deviceId: string | null;
+  periods: HistoryPeriod[];
+  rawWindowDays: number;
+}

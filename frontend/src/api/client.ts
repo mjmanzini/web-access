@@ -4,6 +4,7 @@ import type {
   BandwidthRow,
   Device,
   DnsSetup,
+  HistoryResult,
   InviteLink,
   ParentAccount,
   Profile,
@@ -165,6 +166,12 @@ export const api = {
   networkStatus: () => request<{ running: boolean; version: string | null }>('/network/status'),
   systemHealth: () => request<SystemHealth>('/system/health'),
   storageInfo: () => request<StorageInfo>('/activity/storage'),
+  history: (granularity: string, deviceId?: string, periods?: number) =>
+    request<HistoryResult>(
+      `/activity/history?granularity=${granularity}` +
+        (deviceId ? `&deviceId=${encodeURIComponent(deviceId)}` : '') +
+        (periods ? `&periods=${periods}` : ''),
+    ),
 
   // router + bandwidth
   bandwidth: () => request<BandwidthRow[]>('/bandwidth'),
