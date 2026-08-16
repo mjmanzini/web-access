@@ -10,6 +10,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { IsNull, Repository } from 'typeorm';
 import { Device } from '../entities/device.entity';
 import { ActivityLog } from '../entities/activity-log.entity';
+import { ForgottenDevice } from '../entities/forgotten-device.entity';
 import {
   NETWORK_PROVIDER,
   NetworkProvider,
@@ -49,6 +50,8 @@ export class DevicesService implements OnModuleInit {
   constructor(
     @InjectRepository(Device) private devices: Repository<Device>,
     @InjectRepository(ActivityLog) private activity: Repository<ActivityLog>,
+    @InjectRepository(ForgottenDevice)
+    private forgotten: Repository<ForgottenDevice>,
     @Inject(NETWORK_PROVIDER) private network: NetworkProvider,
     @Inject(ROUTER_PROVIDER) private router: RouterProvider,
     private events: EventsGateway,
@@ -262,6 +265,17 @@ export class DevicesService implements OnModuleInit {
         continue;
       }
 
+      // Was this explicitly forgotten? Honour that, unless the router is now
+      // handing it a DHCP lease — a MAC is the proof that a real device lives
+      // here, and virtual adapters never have one.
+      if (!mac && (await this.isForgotten(d.ip, mac))) {
+        continue;
+      }
+      if (mac && (await this.isForgotten(d.ip, mac))) {
+        // A genuine LAN client came back; the tombstone has served its purpose.
+        await this.clearTombstones(d.ip, mac);
+      }
+
       const randomized = isRandomizedMac(mac);
       const vendor = lookupVendor(mac);
       // Name preference: what discovery reported → what the device answers to
@@ -418,13 +432,51 @@ export class DevicesService implements OnModuleInit {
     return { discovered: discovered.length, created };
   }
 
-  /** Forget a device row; re-created by discovery if it is still active. */
+  /**
+   * Forget a device, and make it stick.
+   *
+   * This used to be advisory — the next sync re-created anything still on the
+   * network. Correct for a real device, useless for the entries that prompted
+   * the button: a WSL vEthernet adapter reappearing after every tidy-up. A
+   * tombstone suppresses re-creation until the address turns up with a DHCP
+   * lease, which a virtual adapter never gets.
+   */
   async remove(id: string): Promise<void> {
     const device = await this.findOne(id);
     const profileId = device.profileId;
     await this.devices.remove(device);
+
+    const keys = this.tombstoneKeys(device.ipAddress, device.macAddress);
+    for (const key of keys) {
+      await this.forgotten
+        .createQueryBuilder()
+        .insert()
+        .values({ key, name: device.name })
+        .orIgnore() // forgetting the same thing twice is not an error
+        .execute();
+    }
+    this.logger.log(`Forgot "${device.name}" (${keys.join(', ')})`);
+
     // Its identifiers were part of the profile's appliance policy — re-push.
     if (profileId) await this.profiles.syncProfile(profileId);
+  }
+
+  private tombstoneKeys(ip: string | null, mac: string | null): string[] {
+    const keys: string[] = [];
+    if (mac) keys.push(`mac:${mac.toLowerCase()}`);
+    if (ip) keys.push(`ip:${ip.toLowerCase()}`);
+    return keys;
+  }
+
+  private async isForgotten(ip: string | null, mac: string | null): Promise<boolean> {
+    const keys = this.tombstoneKeys(ip, mac);
+    if (!keys.length) return false;
+    return (await this.forgotten.countBy(keys.map((key) => ({ key })))) > 0;
+  }
+
+  private async clearTombstones(ip: string | null, mac: string | null): Promise<void> {
+    const keys = this.tombstoneKeys(ip, mac);
+    if (keys.length) await this.forgotten.delete(keys.map((key) => ({ key })));
   }
 
   async update(id: string, dto: UpdateDeviceDto): Promise<Device> {
