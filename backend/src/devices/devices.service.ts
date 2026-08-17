@@ -262,6 +262,8 @@ export class DevicesService implements OnModuleInit {
     let created = 0;
     // Set when a device that enforcement depends on changes address.
     let enforcementStale = false;
+    /** Addresses live in THIS sweep — used to keep a merged row's address put. */
+    const onlineIps = new Set(discovered.filter((x) => x.online).map((x) => x.ip));
 
     for (const d of discovered) {
       const mac = normalizeMac(d.mac);
@@ -291,12 +293,21 @@ export class DevicesService implements OnModuleInit {
       const viaAlias = existing ? null : await this.resolveAlias(d.ip, mac);
 
       if (!existing && viaAlias) {
-        // Recognised, not new. An offline stale lease must not drag the
-        // surviving row back to an address the device no longer holds.
+        // Recognised, not new. Two rules, both learned the hard way:
+        //
+        // An offline stale lease must not drag the surviving row back to an
+        // address the device no longer holds.
+        //
+        // And a device can hold both addresses at once — per-SSID MAC
+        // randomization means one phone appears on the 2.4 and 5 GHz networks
+        // simultaneously. If both are live, the row must stay put rather than
+        // ping-pong between them on every sync, which would make its address
+        // depend on nothing but iteration order.
         if (d.online) {
-          viaAlias.ipAddress = d.ip || viaAlias.ipAddress;
           viaAlias.isOnline = true;
           viaAlias.lastSeenAt = d.lastSeen ?? new Date();
+          const primaryStillLive = onlineIps.has(viaAlias.ipAddress);
+          if (!primaryStillLive) viaAlias.ipAddress = d.ip || viaAlias.ipAddress;
         }
         await this.devices.save(viaAlias);
         continue;

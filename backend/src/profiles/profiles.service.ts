@@ -5,6 +5,7 @@ import { Profile } from '../entities/profile.entity';
 import { Device } from '../entities/device.entity';
 import { Rule } from '../entities/rule.entity';
 import { DailyUsage } from '../entities/daily-usage.entity';
+import { DeviceAlias } from '../entities/device-alias.entity';
 import {
   NETWORK_PROVIDER,
   NetworkProvider,
@@ -39,6 +40,7 @@ export class ProfilesService {
     @InjectRepository(Device) private devices: Repository<Device>,
     @InjectRepository(Rule) private rules: Repository<Rule>,
     @InjectRepository(DailyUsage) private dailyUsage: Repository<DailyUsage>,
+    @InjectRepository(DeviceAlias) private aliases: Repository<DeviceAlias>,
     @Inject(NETWORK_PROVIDER) private network: NetworkProvider,
     @Inject(ROUTER_PROVIDER) private router: RouterProvider,
     private events: EventsGateway,
@@ -296,7 +298,10 @@ export class ProfilesService {
     return {
       clientKey: profile.id,
       displayName: profile.name,
-      identifiers: this.identifiersFor(profile.devices ?? []),
+      identifiers: this.identifiersFor(
+        profile.devices ?? [],
+        await this.loadAliasIps(),
+      ),
       blockedCategories: profile.blockedCategories ?? [],
       safeSearch: profile.safeSearchEnforced,
       youtubeRestricted: profile.youtubeRestricted,
@@ -335,8 +340,9 @@ export class ProfilesService {
 
     const identifiers = new Set<string>();
     const macs = new Set<string>();
+    const aliasIps = await this.loadAliasIps();
     const collect = (devices: Device[]) => {
-      for (const id of this.identifiersFor(devices)) identifiers.add(id);
+      for (const id of this.identifiersFor(devices, aliasIps)) identifiers.add(id);
       for (const d of devices) if (d.macAddress) macs.add(d.macAddress);
     };
     for (const p of pausedProfiles) collect(p.devices ?? []);
@@ -355,10 +361,36 @@ export class ProfilesService {
    * all three means enforcement holds however the device is currently reaching
    * AdGuard (encrypted DNS with a ClientID, or plain DNS by IP/MAC).
    */
-  private identifiersFor(devices: Device[]): string[] {
+  /**
+   * Every address each device has also answered to, from merges.
+   *
+   * Only `ip:` aliases matter here: AdGuard's access list takes an IP, a CIDR
+   * or a ClientID and nothing else, so a MAC alias would break the whole
+   * request (see the note below).
+   */
+  private async loadAliasIps(): Promise<Map<string, string[]>> {
+    const rows = await this.aliases.find();
+    const map = new Map<string, string[]>();
+    for (const a of rows) {
+      if (!a.key.startsWith('ip:')) continue;
+      const ip = a.key.slice(3);
+      map.set(a.deviceId, [...(map.get(a.deviceId) ?? []), ip]);
+    }
+    return map;
+  }
+
+  private identifiersFor(
+    devices: Device[],
+    aliasIps: Map<string, string[]>,
+  ): string[] {
     const ids: string[] = [];
     for (const d of devices) {
       if (d.clientId) ids.push(d.clientId); // durable anchor
+      // Addresses this device has also answered to, from merges. A phone with
+      // per-SSID MAC randomization is genuinely on two addresses at once, so
+      // folding its rows together must not shrink what enforcement covers —
+      // otherwise merging a device quietly opens a hole at its other address.
+      for (const ip of aliasIps.get(d.id) ?? []) ids.push(ip);
       // NOTE: no MAC here. AdGuard's *client* definitions accept a MAC, but its
       // access list (which is what enforces a block) accepts only an IP, a CIDR
       // or a ClientID — a MAC makes the whole request fail with
