@@ -14,6 +14,7 @@ import {
 } from '../../common/categories';
 import { buildAntiBypassRules } from './anti-bypass';
 import { normalizeMac } from '../../common/mac.util';
+import { isSelfAssignedName } from '../../common/hostname.util';
 
 /**
  * AdGuard Home implementation of NetworkProvider. Translates vendor-neutral
@@ -84,7 +85,10 @@ export class AdguardService implements NetworkProvider {
           byIp.set(id, {
             ip: id,
             mac: null,
-            name: c.name,
+            // Our own per-profile client is named `hg-<uuid>`. Reporting that
+            // back as the device's name would be this app reading its own
+            // bookkeeping and mistaking it for something the device said.
+            name: isSelfAssignedName(c.name) ? null : c.name,
             online: false,
             lastSeen: null,
           });

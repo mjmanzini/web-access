@@ -15,6 +15,13 @@ export interface DiscoveredDevice {
   name: string | null;
   online: boolean;
   lastSeen: Date | null;
+  /**
+   * Identification detail, when the source has it. Optional because AdGuard
+   * knows none of it — only the router sees how a device is attached.
+   */
+  connection?: 'wireless' | 'ethernet' | null;
+  ssid?: string | null;
+  addressSource?: string | null;
 }
 
 /** One query-log line, normalized across providers. */

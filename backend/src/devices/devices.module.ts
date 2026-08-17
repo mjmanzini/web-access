@@ -4,13 +4,14 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { Device } from '../entities/device.entity';
 import { ActivityLog } from '../entities/activity-log.entity';
 import { ForgottenDevice } from '../entities/forgotten-device.entity';
+import { DeviceAlias } from '../entities/device-alias.entity';
 import { DevicesService } from './devices.service';
 import { DevicesController } from './devices.controller';
 import { ProfilesModule } from '../profiles/profiles.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Device, ActivityLog, ForgottenDevice]),
+    TypeOrmModule.forFeature([Device, ActivityLog, ForgottenDevice, DeviceAlias]),
     ProfilesModule,
     // For DeviceIdentityService, which mints the kid-app pairing links.
     PortalModule,

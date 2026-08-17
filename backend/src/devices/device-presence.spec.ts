@@ -44,7 +44,11 @@ describe('device presence and last-seen', () => {
    * Enough of the service's world to run a sync. The device repo is real
    * enough to answer the findOne shapes the sync uses and to record saves.
    */
-  function harness(rows: Device[], leases: Array<Record<string, unknown>>) {
+  function harness(
+    rows: Device[],
+    leases: Array<Record<string, unknown>>,
+    aliasRows: Array<{ key: string; deviceId: string }> = [],
+  ) {
     const devices = {
       find: async () => rows,
       findOne: async ({ where }: { where: Record<string, unknown> }) =>
@@ -78,6 +82,11 @@ describe('device presence and last-seen', () => {
       devices as never,
       activity as never,
       { countBy: async () => 0, delete: async () => undefined } as never,
+      {
+        findOne: async ({ where }: { where: { key: string } }) =>
+          aliasRows.find((a) => a.key === where.key) ?? null,
+        delete: async () => undefined,
+      } as never,
       { discoverDevices: async () => [] } as never,
       { isEnabled: () => true, listLeases: async () => leases } as never,
       { emitAlert: () => undefined } as never,
@@ -164,6 +173,39 @@ describe('device presence and last-seen', () => {
     // Left where it was: this is the last sync that genuinely saw it.
     expect(ghost.lastSeenAt).toEqual(TUESDAY);
     expect(here.isOnline).toBe(true);
+  });
+
+  it('does not re-create a merged-away device from its stale lease', async () => {
+    // The failure this prevents, observed live: merging the watch's two rows
+    // worked, and the very next sync put the second one back. The router keeps
+    // reporting the old lease for days, so without an alias the old MAC looks
+    // like a brand-new device every two minutes.
+    const watch = deviceRow({
+      name: 'SM-L330',
+      ipAddress: '192.168.8.104',
+      macAddress: '7a:62:e5:79:d4:66',
+      macRandomized: true,
+      isOnline: true,
+    });
+    const { svc, rows } = harness(
+      [watch],
+      [
+        { ip: '192.168.8.104', mac: '7a:62:e5:79:d4:66', hostname: 'SM-L330', online: true },
+        // The address it used to hold, still leased, still reported, offline.
+        { ip: '192.168.8.102', mac: '5e:6c:7d:97:da:ff', hostname: 'SM-L330', online: false },
+      ],
+      [
+        { key: 'mac:5e:6c:7d:97:da:ff', deviceId: watch.id },
+        { key: 'ip:192.168.8.102', deviceId: watch.id },
+      ],
+    );
+
+    await svc.syncFromNetwork();
+
+    expect(rows).toHaveLength(1);
+    // And the stale lease must not drag it back to the old address.
+    expect(watch.ipAddress).toBe('192.168.8.104');
+    expect(watch.isOnline).toBe(true);
   });
 
   it('does not black out the house when a poll comes back empty', async () => {

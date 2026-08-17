@@ -39,6 +39,70 @@ function absoluteTime(at: string | null): string {
   return Number.isNaN(d.getTime()) ? '' : d.toLocaleString();
 }
 
+/**
+ * What a device is, as far as it can honestly be known.
+ *
+ * Four independent sources, shown in order of how much they settle the
+ * question: the decoded model, the factory code it came from, the
+ * manufacturer from the MAC, and how it is attached. Each is omitted when
+ * absent rather than filled with a placeholder.
+ *
+ * The private-MAC case is stated rather than hidden. A phone with a randomized
+ * MAC is not a lookup failure on our side — it is the device refusing to say,
+ * and it is also what defeats MAC-based blocking, so the parent is better off
+ * knowing than seeing a blank.
+ */
+function DeviceIdentity({ d }: { d: Device }) {
+  const model = d.model ?? null;
+  const code = d.modelCode ?? null;
+  // Don't repeat the code when it is already the whole name.
+  const showCode = code && code.toLowerCase() !== (d.name ?? '').toLowerCase();
+  const vendor = d.vendorLabel ?? d.vendor ?? null;
+
+  return (
+    <>
+      {(model || showCode) && (
+        <div style={{ fontSize: 11, marginTop: 1 }}>
+          {model && <strong>{model}</strong>}
+          {model && showCode && ' '}
+          {showCode && (
+            <span className="muted" title="Factory model code reported by the device">
+              {model ? `(${code})` : code}
+            </span>
+          )}
+        </div>
+      )}
+      <div className="muted" style={{ fontSize: 11 }}>
+        {d.ipAddress}
+        {vendor && (
+          <span
+            title={
+              d.macPrivate
+                ? 'This device uses a randomized (private) MAC address, so its manufacturer cannot be determined — and MAC-based blocking will not hold it.'
+                : 'Manufacturer, from the IEEE registry of MAC address prefixes.'
+            }
+            style={d.macPrivate ? { fontStyle: 'italic' } : undefined}
+          >
+            {' · '}
+            {vendor}
+          </span>
+        )}
+        {d.connectionType === 'wireless' && d.ssid && ` · ${d.ssid}`}
+        {d.connectionType === 'ethernet' && ' · wired'}
+        {d.addressSource === 'Static' && ' · static IP'}
+      </div>
+      {/* The hostname is the evidence behind the model. Once a parent renames
+          the device it is the only surviving trace of what the thing calls
+          itself, so it stays visible when it differs from the label. */}
+      {d.hostname && d.hostname !== d.name && !showCode && (
+        <div className="muted" style={{ fontSize: 10, opacity: 0.75 }}>
+          announces itself as “{d.hostname}”
+        </div>
+      )}
+    </>
+  );
+}
+
 export default function Devices() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
@@ -57,6 +121,7 @@ export default function Devices() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [dupes, setDupes] = useState<Array<{ key: string; deviceIds: string[] }>>([]);
   const navigate = useNavigate();
   const confirm = useConfirm();
 
@@ -73,6 +138,8 @@ export default function Devices() {
         setLoadError((e as Error)?.message || 'Could not load devices.'),
       )
       .finally(() => setLoading(false));
+    // A suggestion, not a requirement — never let it break the page.
+    api.duplicateDevices().then(setDupes).catch(() => setDupes([]));
     // Bandwidth is decoration on this router (it has no per-host counters), so
     // its failure must not blank the page.
     api.bandwidth()
@@ -257,6 +324,57 @@ export default function Devices() {
 
       {loadError && <ErrorNotice message={loadError} onRetry={load} />}
       {error && <div className="badge danger" style={{ marginBottom: 12, display: "block" }}>{error}</div>}
+
+      {/* Suggested, never applied. Two identical tablets in one house look
+          exactly like one tablet that changed its MAC, and only the parent
+          knows which it is. */}
+      {dupes.map((g) => {
+        const rows = g.deviceIds.map((id) => devices.find((d) => d.id === id)).filter(Boolean) as Device[];
+        if (rows.length < 2) return null;
+        const [keeper, ...rest] = rows;
+        const what = keeper.model ? `${keeper.model} ` : '';
+        return (
+          <div key={g.key} className="card" style={{ marginBottom: 12, background: 'var(--panel-2)' }}>
+            <div style={{ fontSize: 13, marginBottom: 6 }}>
+              <strong>Possibly one device, listed {rows.length} times</strong>
+            </div>
+            <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+              {rows.map((r) => r.ipAddress).join(' and ')} all announce themselves as
+              “{keeper.hostname ?? keeper.name}”{what && ` (${what.trim()})`} with a
+              different private MAC each time — which is what one device looks like
+              when it randomises its address. Merging keeps all the history on one
+              row. If you really do own {rows.length} of them, leave this alone.
+            </div>
+            <button
+              className="ghost"
+              disabled={pending.has(`merge:${keeper.id}`)}
+              onClick={async () => {
+                const ok = await confirm({
+                  title: `Merge into one device?`,
+                  body: `${rest.length + 1} rows become one. History and usage from all of them are kept, and any profile or block stays applied.`,
+                  confirmLabel: 'Merge',
+                });
+                if (!ok) return;
+                setPending((p) => new Set(p).add(`merge:${keeper.id}`));
+                try {
+                  for (const other of rest) await api.mergeDevices(keeper.id, other.id);
+                  load();
+                } catch (e) {
+                  setError((e as Error)?.message || 'Could not merge those devices.');
+                } finally {
+                  setPending((p) => {
+                    const n = new Set(p);
+                    n.delete(`merge:${keeper.id}`);
+                    return n;
+                  });
+                }
+              }}
+            >
+              {pending.has(`merge:${keeper.id}`) ? 'Merging…' : `Merge ${rows.length} rows into one`}
+            </button>
+          </div>
+        );
+      })}
       {pairError && <div className="badge danger" style={{ marginBottom: 12, display: "block" }}>{pairError}</div>}
 
       <div className="card">
@@ -293,12 +411,15 @@ export default function Devices() {
                           title="Click to rename"
                           style={{ cursor: 'pointer' }}
                         >
-                          <span className={`dot ${d.isOnline ? 'on' : 'off'}`} /> {d.name}
+                          <span className={`dot ${d.isOnline ? 'on' : 'off'}`} />{' '}
+                          {d.kindIcon && <span title={d.kind ?? ''}>{d.kindIcon} </span>}
+                          {d.name}
                         </span>
-                        <div className="muted" style={{ fontSize: 11 }}>
-                          {d.ipAddress}
-                          {d.vendor && ` · ${d.vendor}`}
-                        </div>
+                        {/* What the device actually is. A decoded model goes
+                            first because it is the line that answers "what is
+                            this thing on my network"; the factory code stays
+                            visible next to it so the claim can be checked. */}
+                        <DeviceIdentity d={d} />
                         {/* Deliberately in the FIRST column. The other actions
                             sit in the last one, and on a phone this table
                             scrolls sideways — anything over there is

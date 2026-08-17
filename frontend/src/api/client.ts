@@ -151,6 +151,14 @@ export const api = {
   updateDevice: (id: string, body: Partial<Device>) =>
     request<Device>(`/devices/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   deleteDevice: (id: string) => request<void>(`/devices/${id}`, { method: 'DELETE' }),
+  /** Rows that look like one device seen twice — a suggestion, not a change. */
+  duplicateDevices: () =>
+    request<Array<{ key: string; deviceIds: string[] }>>('/devices/duplicates'),
+  mergeDevices: (keeperId: string, absorbedId: string) =>
+    request<Device>(`/devices/${keeperId}/merge`, {
+      method: 'POST',
+      body: JSON.stringify({ absorbedId }),
+    }),
 
   // rules
   rules: () => request<Rule[]>('/rules'),

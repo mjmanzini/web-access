@@ -84,17 +84,29 @@ describe('huawei parsers', () => {
   });
 
   it('parses HostInfo including offline devices, preferring ActualName', () => {
+    // Field set copied from a real B525 response — the feed carries rather more
+    // than name and liveness, and all of it is worth reading.
     const xml = `<response><Hosts>
-      <Host><Active>1</Active><IpAddress>192.168.8.60</IpAddress><MacAddress>a2:fe:3c:3e:cb:ac</MacAddress><HostName>Jastice-2</HostName><ActualName>Jastice-2</ActualName></Host>
-      <Host><Active>0</Active><IpAddress>192.168.8.102</IpAddress><MacAddress>5e:6c:7d:97:da:ff</MacAddress><HostName>SM-L330</HostName><ActualName>Kids tablet</ActualName></Host>
-      <Host><Active>0</Active><IpAddress>192.168.8.114</IpAddress><MacAddress>54:8d:5a:e7:9c:6c</MacAddress><HostName>unknown</HostName><ActualName></ActualName></Host>
+      <Host><Active>1</Active><IpAddress>192.168.8.60</IpAddress><MacAddress>a2:fe:3c:3e:cb:ac</MacAddress><AssociatedSsid>84 Bishopscourt_5G</AssociatedSsid><AssociatedTime>43467</AssociatedTime><AddressSource>DHCP</AddressSource><InterfaceType>Wireless</InterfaceType><HostName>Jastice-2</HostName><ActualName>Jastice-2</ActualName></Host>
+      <Host><Active>0</Active><IpAddress>192.168.8.102</IpAddress><MacAddress>5e:6c:7d:97:da:ff</MacAddress><AssociatedSsid></AssociatedSsid><AssociatedTime></AssociatedTime><AddressSource>DHCP</AddressSource><InterfaceType>Wireless</InterfaceType><HostName>SM-L330</HostName><ActualName>Kids tablet</ActualName></Host>
+      <Host><Active>0</Active><IpAddress>192.168.8.114</IpAddress><MacAddress>54:8d:5a:e7:9c:6c</MacAddress><AddressSource>Static</AddressSource><InterfaceType>Ethernet</InterfaceType><HostName>unknown</HostName><ActualName></ActualName></Host>
     </Hosts></response>`;
     expect(parseHostInfo(xml)).toEqual([
-      { ip: '192.168.8.60', mac: 'a2:fe:3c:3e:cb:ac', hostname: 'Jastice-2', online: true },
+      {
+        ip: '192.168.8.60', mac: 'a2:fe:3c:3e:cb:ac', hostname: 'Jastice-2', online: true,
+        connection: 'wireless', ssid: '84 Bishopscourt_5G', addressSource: 'DHCP',
+        associatedSeconds: 43467,
+      },
       // ActualName (set in the router UI) wins over the self-reported HostName.
-      { ip: '192.168.8.102', mac: '5e:6c:7d:97:da:ff', hostname: 'Kids tablet', online: false },
+      {
+        ip: '192.168.8.102', mac: '5e:6c:7d:97:da:ff', hostname: 'Kids tablet', online: false,
+        connection: 'wireless', ssid: null, addressSource: 'DHCP', associatedSeconds: null,
+      },
       // "unknown" and blank are both discarded rather than becoming the name.
-      { ip: '192.168.8.114', mac: '54:8d:5a:e7:9c:6c', hostname: null, online: false },
+      {
+        ip: '192.168.8.114', mac: '54:8d:5a:e7:9c:6c', hostname: null, online: false,
+        connection: 'ethernet', ssid: null, addressSource: 'Static', associatedSeconds: null,
+      },
     ]);
   });
 

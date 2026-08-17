@@ -200,6 +200,18 @@ export function isNonDeviceAddress(
  * may be replaced by better discovery; anything else is treated as user-set and
  * is never overwritten by a scan.
  */
+/**
+ * A name this app invented, read back to us.
+ *
+ * We create one AdGuard client per profile called `hg-<uuid>`, and AdGuard
+ * reports its own client list back through discovery — so without this check
+ * our own bookkeeping arrives looking like a device announcing its name, and
+ * ends up displayed as what the hardware calls itself. It identifies nothing.
+ */
+export function isSelfAssignedName(name: string | null | undefined): boolean {
+  return /^hg-[0-9a-f-]{8,}$/i.test((name ?? '').trim());
+}
+
 export function isPlaceholderName(
   name: string | null | undefined,
   ip: string | null,
@@ -208,6 +220,7 @@ export function isPlaceholderName(
   if (!name) return true;
   const n = name.trim();
   if (!n) return true;
+  if (isSelfAssignedName(n)) return true;
   if (ip && n === ip) return true;
   if (/^\d+\.\d+\.\d+\.\d+$/.test(n)) return true; // any bare IPv4
   if (vendor && n === `${vendor} device`) return true;

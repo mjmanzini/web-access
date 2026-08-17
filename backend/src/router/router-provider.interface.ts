@@ -22,6 +22,21 @@ export interface RouterLease {
    * which is how devices that are switched off stay in the inventory.
    */
   online?: boolean;
+  /**
+   * How the device is attached — "wireless" or "ethernet". Worth surfacing:
+   * it distinguishes a phone from the TV nobody can unplug, and a device that
+   * moves between the two is a laptop, not a fixed appliance.
+   */
+  connection?: 'wireless' | 'ethernet' | null;
+  /**
+   * Which SSID it associated with. The 2.4 GHz and 5 GHz bands are separate
+   * networks here, and a device on the guest SSID is worth noticing.
+   */
+  ssid?: string | null;
+  /** "DHCP" or "Static" — a static lease is a deliberate act by someone. */
+  addressSource?: string | null;
+  /** Seconds since it associated, when the router reports it. */
+  associatedSeconds?: number | null;
 }
 
 /** Cumulative per-MAC byte counters as reported by the router. */

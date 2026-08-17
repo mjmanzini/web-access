@@ -53,6 +53,27 @@ export class Device {
   @Column({ type: 'varchar', nullable: true })
   vendor: string | null;
 
+  /**
+   * The name the device announced on the network (DHCP / router), kept apart
+   * from `name` because renaming is the first thing a parent does and it
+   * destroys the evidence. "Njabulo Tablet" is the useful label; "SM-X205" is
+   * what identifies the hardware, and both are worth having.
+   */
+  @Column({ type: 'varchar', nullable: true })
+  hostname: string | null;
+
+  /** "wireless" | "ethernet", when the router says. */
+  @Column({ type: 'varchar', nullable: true })
+  connectionType: string | null;
+
+  /** SSID it associated with — the 2.4 and 5 GHz bands are separate networks. */
+  @Column({ type: 'varchar', nullable: true })
+  ssid: string | null;
+
+  /** "DHCP" or "Static"; a static lease means somebody decided it. */
+  @Column({ type: 'varchar', nullable: true })
+  addressSource: string | null;
+
   @Column({ default: false })
   isOnline: boolean;
 

@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Inject,
   Injectable,
   Logger,
@@ -11,6 +12,7 @@ import { IsNull, Repository } from 'typeorm';
 import { Device } from '../entities/device.entity';
 import { ActivityLog } from '../entities/activity-log.entity';
 import { ForgottenDevice } from '../entities/forgotten-device.entity';
+import { DeviceAlias } from '../entities/device-alias.entity';
 import {
   NETWORK_PROVIDER,
   NetworkProvider,
@@ -23,10 +25,12 @@ import { EventsGateway } from '../events/events.gateway';
 import { ProfilesService } from '../profiles/profiles.service';
 import { isRandomizedMac, normalizeMac } from '../common/mac.util';
 import { generateClientId } from '../common/client-id.util';
-import { lookupVendor } from '../common/oui';
+import { lookupVendor, vendorLabel } from '../common/oui';
+import { decodeModel, kindIcon } from '../common/device-model';
 import {
   isNonDeviceAddress,
   isPlaceholderName,
+  isSelfAssignedName,
   resolveHostname,
 } from '../common/hostname.util';
 import { UpdateDeviceDto } from './dto/device.dto';
@@ -52,6 +56,8 @@ export class DevicesService implements OnModuleInit {
     @InjectRepository(ActivityLog) private activity: Repository<ActivityLog>,
     @InjectRepository(ForgottenDevice)
     private forgotten: Repository<ForgottenDevice>,
+    @InjectRepository(DeviceAlias)
+    private aliases: Repository<DeviceAlias>,
     @Inject(NETWORK_PROVIDER) private network: NetworkProvider,
     @Inject(ROUTER_PROVIDER) private router: RouterProvider,
     private events: EventsGateway,
@@ -89,7 +95,19 @@ export class DevicesService implements OnModuleInit {
    * can sit unprotected for an hour with nothing looking wrong.
    */
   async findAll(): Promise<
-    Array<Device & { lastFilteredAt: string | null; usingFilter: boolean }>
+    Array<
+      Device & {
+        lastFilteredAt: string | null;
+        usingFilter: boolean;
+        vendorLabel: string;
+        vendorKnown: boolean;
+        macPrivate: boolean;
+        modelCode: string | null;
+        model: string | null;
+        kind: string | null;
+        kindIcon: string;
+      }
+    >
   > {
     const devices = await this.devices.find({
       relations: { profile: true },
@@ -117,8 +135,21 @@ export class DevicesService implements OnModuleInit {
       const seen = [d.lastSeenAt, last]
         .filter((v): v is Date => !!v)
         .sort((a, b) => b.getTime() - a.getTime())[0];
+      // Identity is derived, never stored: the OUI table and the model list
+      // both improve over time, and a device should pick up a better answer on
+      // the next page load rather than being stuck with whatever was known on
+      // the day it was discovered.
+      const vendor = vendorLabel(d.macAddress, d.vendor);
+      const decoded = decodeModel(d.hostname ?? d.name);
       return Object.assign(d, {
         lastSeenAt: seen ?? null,
+        vendorLabel: vendor.text,
+        vendorKnown: vendor.known,
+        macPrivate: vendor.private,
+        modelCode: decoded.code,
+        model: decoded.model,
+        kind: decoded.kind,
+        kindIcon: kindIcon(decoded.kind),
         lastFilteredAt: last ? last.toISOString() : null,
         // Only meaningful for devices that are actually here: an offline device
         // is silent for the obvious reason.
@@ -187,6 +218,10 @@ export class DevicesService implements OnModuleInit {
           existing.name = existing.name ?? lease.hostname;
           // Seen resolving DNS ⇒ online, whatever the router's table says.
           existing.online = existing.online || lease.online === true;
+          // Only the router knows any of this; AdGuard never supplies it.
+          existing.connection = lease.connection ?? null;
+          existing.ssid = lease.ssid ?? null;
+          existing.addressSource = lease.addressSource ?? null;
         } else {
           const d = {
             ip: lease.ip,
@@ -201,6 +236,9 @@ export class DevicesService implements OnModuleInit {
             // for one is the difference between "off since Tuesday" and the
             // dashboard insisting it was here a minute ago.
             lastSeen: lease.online === false ? null : new Date(),
+            connection: lease.connection ?? null,
+            ssid: lease.ssid ?? null,
+            addressSource: lease.addressSource ?? null,
           };
           discovered.push(d);
           byIp.set(lease.ip, d);
@@ -247,6 +285,23 @@ export class DevicesService implements OnModuleInit {
           }))
         : await this.devices.findOne({ where: { ipAddress: d.ip } });
 
+      // A merged-away identity still holds a DHCP lease the router reports for
+      // days. Resolve it to the row it was merged into, or the merge is undone
+      // on the next tick.
+      const viaAlias = existing ? null : await this.resolveAlias(d.ip, mac);
+
+      if (!existing && viaAlias) {
+        // Recognised, not new. An offline stale lease must not drag the
+        // surviving row back to an address the device no longer holds.
+        if (d.online) {
+          viaAlias.ipAddress = d.ip || viaAlias.ipAddress;
+          viaAlias.isOnline = true;
+          viaAlias.lastSeenAt = d.lastSeen ?? new Date();
+        }
+        await this.devices.save(viaAlias);
+        continue;
+      }
+
       if (existing) {
         // Enforcement rules are pinned to the IP (the ClientID only applies
         // once encrypted DNS is set up). If a blocked device gets a new lease,
@@ -267,8 +322,18 @@ export class DevicesService implements OnModuleInit {
         if (mac) {
           existing.macAddress = mac;
           existing.macRandomized = isRandomizedMac(mac);
-          if (!existing.vendor) existing.vendor = lookupVendor(mac);
+          // Re-derive every sync rather than only when empty: the OUI table
+          // grows, and a row named from a thinner table should benefit from a
+          // better one without being forgotten and rediscovered.
+          existing.vendor = lookupVendor(mac) ?? existing.vendor;
         }
+        // What the network calls it, kept whatever the parent renames it to.
+        // Our own AdGuard client names come back through discovery; recording
+        // one as "what this device announces" would be quoting ourselves.
+        if (d.name && !isSelfAssignedName(d.name)) existing.hostname = d.name;
+        if (d.connection !== undefined) existing.connectionType = d.connection;
+        if (d.ssid !== undefined) existing.ssid = d.ssid;
+        if (d.addressSource !== undefined) existing.addressSource = d.addressSource;
         // Upgrade auto-derived names when discovery learns something better.
         // A name the parent typed is never a placeholder, so it is never lost.
         if (isPlaceholderName(existing.name, existing.ipAddress, existing.vendor)) {
@@ -311,6 +376,10 @@ export class DevicesService implements OnModuleInit {
         // off has genuinely never been seen, and null renders as "never seen"
         // rather than inventing a moment it was here.
         lastSeenAt: d.online ? (d.lastSeen ?? new Date()) : (d.lastSeen ?? null),
+        hostname: (d.name && !isSelfAssignedName(d.name) ? d.name : null) ?? probed.get(d.ip) ?? null,
+        connectionType: d.connection ?? null,
+        ssid: d.ssid ?? null,
+        addressSource: d.addressSource ?? null,
       });
       const saved = await this.devices.save(device);
       created++;
@@ -483,6 +552,168 @@ export class DevicesService implements OnModuleInit {
    * tombstone suppresses re-creation until the address turns up with a DHCP
    * lease, which a virtual adapter never gets.
    */
+  /**
+   * Rows that look like the same physical device seen twice.
+   *
+   * The signal is a shared announced hostname plus a randomized MAC on at
+   * least one side — which is exactly how MAC randomization manifests: same
+   * device, new MAC, new lease, new row. A shared *factory code* hostname
+   * ("SM-L330") is the strongest case, since that is the device naming itself
+   * rather than a person naming it.
+   *
+   * Returned as a suggestion, never acted on. See merge() for why.
+   */
+  async duplicateGroups(): Promise<Array<{ key: string; deviceIds: string[] }>> {
+    const all = await this.devices.find();
+    const byName = new Map<string, Device[]>();
+    for (const d of all) {
+      const announced = (d.hostname ?? d.name ?? '').trim().toLowerCase();
+      if (!announced) continue;
+      byName.set(announced, [...(byName.get(announced) ?? []), d]);
+    }
+    const groups: Array<{ key: string; deviceIds: string[] }> = [];
+    for (const [key, rows] of byName) {
+      if (rows.length < 2) continue;
+      // Without a randomized MAC in the mix these are simply two devices with
+      // the same name, which is a labelling problem, not a duplicate.
+      if (!rows.some((r) => r.macRandomized)) continue;
+      // Two rows already assigned to different children are two devices as far
+      // as the household is concerned; never suggest undoing that.
+      const profiles = new Set(rows.map((r) => r.profileId).filter(Boolean));
+      if (profiles.size > 1) continue;
+      groups.push({
+        key,
+        deviceIds: rows
+          .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+          .map((r) => r.id),
+      });
+    }
+    return groups;
+  }
+
+  /**
+   * Fold one device row into another, keeping all of both devices' history.
+   *
+   * A phone or watch with MAC randomization presents a fresh MAC on a fresh
+   * lease and arrives as a brand-new device. The existing dedupe only collapses
+   * rows sharing an IP, so a device that reconnects on a different address
+   * escapes it entirely — which is how one Galaxy Watch became two entries a
+   * day apart.
+   *
+   * This is deliberately NOT automatic. Two identical tablets in one house
+   * announce the same hostname and both randomize their MACs; there is no
+   * signal that separates "one device twice" from "two devices". Merging them
+   * silently would hand one child's controls to both. So the app points out the
+   * resemblance and a parent, who knows how many watches they own, decides.
+   */
+  async merge(keeperId: string, absorbedId: string): Promise<Device> {
+    if (keeperId === absorbedId) {
+      throw new BadRequestException('A device cannot be merged into itself.');
+    }
+    const keeper = await this.findOne(keeperId);
+    const absorbed = await this.findOne(absorbedId);
+
+    await this.devices.manager.transaction(async (tx) => {
+      // Plain repoints: nothing here can collide.
+      for (const [table, col] of [
+        ['activity_logs', 'deviceId'],
+        ['rules', 'deviceId'],
+        ['push_subscriptions', 'deviceId'],
+        ['access_requests', 'deviceId'],
+      ] as const) {
+        await tx.query(
+          `UPDATE ${table} SET "${col}" = $1 WHERE "${col}" = $2`,
+          [keeper.id, absorbed.id],
+        );
+      }
+
+      // Counter tables are keyed by (device, day), so the two rows for a day
+      // both devices were seen must be added together, not one dropped.
+      await tx.query(
+        `INSERT INTO device_daily (date, "deviceId", "deviceName", "profileId", "activeMinutes", lookups, blocked)
+         SELECT date, $1, "deviceName", "profileId", "activeMinutes", lookups, blocked
+           FROM device_daily WHERE "deviceId" = $2
+         ON CONFLICT (date, "deviceId") DO UPDATE SET
+           "activeMinutes" = device_daily."activeMinutes" + EXCLUDED."activeMinutes",
+           lookups         = device_daily.lookups + EXCLUDED.lookups,
+           blocked         = device_daily.blocked + EXCLUDED.blocked`,
+        [keeper.id, absorbed.id],
+      );
+      await tx.query(`DELETE FROM device_daily WHERE "deviceId" = $1`, [absorbed.id]);
+
+      await tx.query(
+        `INSERT INTO activity_rollups (date, "profileId", "deviceId", domain, action, hits)
+         SELECT date, "profileId", $1, domain, action, hits
+           FROM activity_rollups WHERE "deviceId" = $2
+         ON CONFLICT (date, "profileId", "deviceId", domain, action) DO UPDATE SET
+           hits = activity_rollups.hits + EXCLUDED.hits`,
+        [keeper.id, absorbed.id],
+      );
+      await tx.query(`DELETE FROM activity_rollups WHERE "deviceId" = $1`, [absorbed.id]);
+
+      await tx.query(
+        `INSERT INTO device_usage ("deviceId", date, "rxBytes", "txBytes")
+         SELECT $1, date, "rxBytes", "txBytes" FROM device_usage WHERE "deviceId" = $2
+         ON CONFLICT ("deviceId", date) DO UPDATE SET
+           "rxBytes" = device_usage."rxBytes" + EXCLUDED."rxBytes",
+           "txBytes" = device_usage."txBytes" + EXCLUDED."txBytes"`,
+        [keeper.id, absorbed.id],
+      );
+      await tx.query(`DELETE FROM device_usage WHERE "deviceId" = $1`, [absorbed.id]);
+
+      // The keeper takes on whichever facts are live. "Newer" is by last
+      // sighting: the row that was seen most recently holds the address and
+      // MAC the device is actually using now.
+      const absorbedIsNewer =
+        (absorbed.lastSeenAt?.getTime() ?? 0) > (keeper.lastSeenAt?.getTime() ?? 0);
+      if (absorbedIsNewer) {
+        keeper.ipAddress = absorbed.ipAddress;
+        keeper.macAddress = absorbed.macAddress;
+        keeper.macRandomized = absorbed.macRandomized;
+        keeper.lastSeenAt = absorbed.lastSeenAt;
+        keeper.hostname = absorbed.hostname ?? keeper.hostname;
+        keeper.connectionType = absorbed.connectionType ?? keeper.connectionType;
+        keeper.ssid = absorbed.ssid ?? keeper.ssid;
+        keeper.addressSource = absorbed.addressSource ?? keeper.addressSource;
+      }
+      keeper.isOnline = keeper.isOnline || absorbed.isOnline;
+      keeper.vendor = keeper.vendor ?? absorbed.vendor;
+      // Never lose a parent's decisions to a merge.
+      keeper.profileId = keeper.profileId ?? absorbed.profileId;
+      keeper.blocked = keeper.blocked || absorbed.blocked;
+      if (isPlaceholderName(keeper.name, keeper.ipAddress, keeper.vendor)) {
+        if (!isPlaceholderName(absorbed.name, absorbed.ipAddress, absorbed.vendor)) {
+          keeper.name = absorbed.name;
+        }
+      }
+      await tx.save(Device, keeper);
+      await tx.delete(Device, { id: absorbed.id });
+
+      // Without this the merge lasts one sync. The absorbed MAC and address
+      // still hold a DHCP lease the router keeps reporting, so discovery would
+      // find no device for them and create the duplicate all over again.
+      for (const key of this.tombstoneKeys(absorbed.ipAddress, absorbed.macAddress)) {
+        await tx.query(
+          `INSERT INTO device_aliases (key, "deviceId", name) VALUES ($1, $2, $3)
+           ON CONFLICT (key) DO UPDATE SET "deviceId" = EXCLUDED."deviceId"`,
+          [key, keeper.id, absorbed.name],
+        );
+      }
+      // The keeper's own current identity must not be an alias of itself.
+      await tx.query(`DELETE FROM device_aliases WHERE key = ANY($1)`, [
+        this.tombstoneKeys(keeper.ipAddress, keeper.macAddress),
+      ]);
+    });
+
+    this.logger.log(
+      `Merged "${absorbed.name}" (${absorbed.ipAddress}) into "${keeper.name}" (${keeper.ipAddress})`,
+    );
+    // The absorbed row's identifiers were part of enforcement; re-push.
+    await this.profiles.syncBlockedIdentifiers();
+    if (keeper.profileId) await this.profiles.syncProfile(keeper.profileId);
+    return this.findOne(keeper.id);
+  }
+
   async remove(id: string): Promise<void> {
     const device = await this.findOne(id);
     const profileId = device.profileId;
@@ -508,6 +739,25 @@ export class DevicesService implements OnModuleInit {
     if (mac) keys.push(`mac:${mac.toLowerCase()}`);
     if (ip) keys.push(`ip:${ip.toLowerCase()}`);
     return keys;
+  }
+
+  /** The surviving device an old MAC/address was merged into, if any. */
+  private async resolveAlias(
+    ip: string | null,
+    mac: string | null,
+  ): Promise<Device | null> {
+    const keys = this.tombstoneKeys(ip, mac);
+    if (!keys.length) return null;
+    // MAC first: it is the identity, the address is only where it was.
+    for (const key of keys) {
+      const hit = await this.aliases.findOne({ where: { key } });
+      if (!hit) continue;
+      const device = await this.devices.findOne({ where: { id: hit.deviceId } });
+      if (device) return device;
+      // The device it pointed at is gone; the alias is now noise.
+      await this.aliases.delete({ key });
+    }
+    return null;
   }
 
   private async isForgotten(ip: string | null, mac: string | null): Promise<boolean> {

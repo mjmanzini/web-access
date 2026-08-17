@@ -18,7 +18,21 @@ export function parseHostInfo(xml: string): RouterLease[] {
     const actual = tag(host, 'ActualName');
     const reported = tag(host, 'HostName');
     const name = [actual, reported].find((n) => n && n !== 'unknown') ?? null;
-    leases.push({ ip, mac, hostname: name, online: tag(host, 'Active') === '1' });
+    // The feed carries more than name and liveness. InterfaceType, the SSID it
+    // associated with, and whether the address is static are all things a
+    // parent can act on, and they cost nothing extra to read.
+    const iface = (tag(host, 'InterfaceType') ?? '').toLowerCase();
+    const assoc = Number(tag(host, 'AssociatedTime'));
+    leases.push({
+      ip,
+      mac,
+      hostname: name,
+      online: tag(host, 'Active') === '1',
+      connection: iface.includes('wireless') ? 'wireless' : iface ? 'ethernet' : null,
+      ssid: tag(host, 'AssociatedSsid') || null,
+      addressSource: tag(host, 'AddressSource') || null,
+      associatedSeconds: Number.isFinite(assoc) && assoc > 0 ? assoc : null,
+    });
   }
   return leases;
 }

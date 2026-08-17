@@ -48,6 +48,25 @@ export interface Device {
   usingFilter?: boolean;
   blocked: boolean;
   profileId: string | null;
+
+  // ---- Identification (all derived server-side, all optional) ----
+  /** The name the network reported, before any rename by a parent. */
+  hostname?: string | null;
+  /** Ready-to-show manufacturer, or an honest reason there isn't one. */
+  vendorLabel?: string;
+  /** False when the vendor is unknown OR deliberately hidden. */
+  vendorKnown?: boolean;
+  /** The device is using a randomized MAC, so no vendor can be known. */
+  macPrivate?: boolean;
+  /** Factory code found in the hostname, e.g. "SM-L330". */
+  modelCode?: string | null;
+  /** Decoded friendly model, e.g. "Galaxy Watch8 (44mm)". */
+  model?: string | null;
+  kind?: string | null;
+  kindIcon?: string;
+  connectionType?: string | null;
+  ssid?: string | null;
+  addressSource?: string | null;
 }
 
 export interface DnsSetup {

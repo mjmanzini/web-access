@@ -24,9 +24,25 @@ export class DevicesController {
     return this.devices.findAll();
   }
 
+  /**
+   * Rows that look like one device seen twice (MAC randomization). A
+   * suggestion for a parent to confirm — never applied automatically.
+   * Declared before :id so "duplicates" is not read as a device id.
+   */
+  @Get('duplicates')
+  duplicates() {
+    return this.devices.duplicateGroups();
+  }
+
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.devices.findOne(id);
+  }
+
+  /** Fold `absorbedId` into this device, keeping both histories. */
+  @Post(':id/merge')
+  merge(@Param('id') id: string, @Body() body: { absorbedId: string }) {
+    return this.devices.merge(id, body?.absorbedId);
   }
 
   /** Encrypted-DNS (DoT/DoH/DoQ) setup endpoints for pinning this device's
