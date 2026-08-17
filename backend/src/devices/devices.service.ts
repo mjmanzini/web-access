@@ -110,7 +110,15 @@ export class DevicesService implements OnModuleInit {
 
     return devices.map((d) => {
       const last = lastByIp.get(d.ipAddress) ?? null;
+      // A resolved query is proof the device was here at that instant —
+      // stronger evidence than the router's table, which lags by minutes and
+      // had a phone marked absent half an hour after it last asked us for a
+      // name. Report whichever evidence is more recent.
+      const seen = [d.lastSeenAt, last]
+        .filter((v): v is Date => !!v)
+        .sort((a, b) => b.getTime() - a.getTime())[0];
       return Object.assign(d, {
+        lastSeenAt: seen ?? null,
         lastFilteredAt: last ? last.toISOString() : null,
         // Only meaningful for devices that are actually here: an offline device
         // is silent for the obvious reason.
@@ -188,7 +196,11 @@ export class DevicesService implements OnModuleInit {
             // them as online would make the dashboard claim the whole house is
             // always connected.
             online: lease.online ?? true,
-            lastSeen: new Date(),
+            // Being listed in the lease table is not the same as being here.
+            // A switched-off device keeps its lease, so stamping "seen now"
+            // for one is the difference between "off since Tuesday" and the
+            // dashboard insisting it was here a minute ago.
+            lastSeen: lease.online === false ? null : new Date(),
           };
           discovered.push(d);
           byIp.set(lease.ip, d);
@@ -246,7 +258,12 @@ export class DevicesService implements OnModuleInit {
         }
         existing.ipAddress = d.ip || existing.ipAddress;
         existing.isOnline = d.online;
-        existing.lastSeenAt = d.lastSeen ?? new Date();
+        // Only presence moves this clock. Discovery lists devices that are
+        // switched off — they hold a DHCP lease and keep an AdGuard client
+        // entry — so advancing last-seen for every row in the feed made every
+        // offline device read "1m ago" forever, which is precisely as useful
+        // as no timestamp at all. When it is gone, the old value stands.
+        if (d.online) existing.lastSeenAt = d.lastSeen ?? new Date();
         if (mac) {
           existing.macAddress = mac;
           existing.macRandomized = isRandomizedMac(mac);
@@ -290,7 +307,10 @@ export class DevicesService implements OnModuleInit {
         macRandomized: randomized,
         vendor,
         isOnline: d.online,
-        lastSeenAt: d.lastSeen ?? new Date(),
+        // Same rule for a first sighting: a device discovered while switched
+        // off has genuinely never been seen, and null renders as "never seen"
+        // rather than inventing a moment it was here.
+        lastSeenAt: d.online ? (d.lastSeen ?? new Date()) : (d.lastSeen ?? null),
       });
       const saved = await this.devices.save(device);
       created++;
@@ -312,6 +332,28 @@ export class DevicesService implements OnModuleInit {
     // what a first router-provider sync leaves behind). Only ever removes
     // unassigned rows, so nothing a parent has organised is touched.
     const all = await this.devices.find();
+
+    // Anything the feed no longer lists has left. Without this a device that
+    // simply vanishes — its address gone from both AdGuard and the router —
+    // stays "online" forever with a last-seen frozen at the moment it went,
+    // which is how host.docker.internal sat in the online count for a day and
+    // a half. Guarded on a non-empty feed so one bad poll cannot declare the
+    // whole house offline. Last-seen is deliberately untouched: it already
+    // holds the last sync that really did see them.
+    if (discovered.length) {
+      const present = new Set(discovered.map((d) => d.ip));
+      const departed = all.filter(
+        (row) => row.isOnline && !present.has(row.ipAddress),
+      );
+      for (const row of departed) row.isOnline = false;
+      if (departed.length) {
+        await this.devices.save(departed);
+        this.logger.log(
+          `Device sync: ${departed.length} no longer present, marked offline`,
+        );
+      }
+    }
+
     const ipsWithMac = new Set(
       all.filter((row) => row.macAddress).map((row) => row.ipAddress),
     );

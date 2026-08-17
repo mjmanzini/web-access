@@ -13,12 +13,30 @@ const isAutoName = (d: Device) =>
 /** "3m ago" / "2h ago" / "4d ago" — compact last-seen for offline devices. */
 function lastSeen(at: string | null): string {
   if (!at) return 'never seen';
-  const mins = Math.floor((Date.now() - new Date(at).getTime()) / 60000);
+  const t = new Date(at).getTime();
+  if (Number.isNaN(t)) return 'unknown';
+  const mins = Math.floor((Date.now() - t) / 60000);
+  // Clock skew between phone and server can put a timestamp slightly ahead.
+  // "in 2 minutes" for a device that just left is worse than "just now".
   if (mins < 1) return 'just now';
   if (mins < 60) return `${mins}m ago`;
   const hours = Math.floor(mins / 60);
   if (hours < 24) return `${hours}h ago`;
   return `${Math.floor(hours / 24)}d ago`;
+}
+
+/**
+ * The same moment written out, for the tooltip behind the relative label.
+ *
+ * The API sends UTC, as it should. Printing that string raw showed a
+ * Johannesburg parent a time two hours behind their own clock — the relative
+ * math was right all along, only this readout lied. `toLocaleString` renders
+ * in the reader's zone, which is the one they are comparing against.
+ */
+function absoluteTime(at: string | null): string {
+  if (!at) return 'Never seen on the network';
+  const d = new Date(at);
+  return Number.isNaN(d.getTime()) ? '' : d.toLocaleString();
 }
 
 export default function Devices() {
@@ -326,7 +344,9 @@ export default function Devices() {
                           )}
                         </>
                       : d.lastFilteredAt ? (
-                        <span title="When the filter last saw this device ask for anything. Not megabytes — AdGuard sees DNS names, not traffic, and this router reports no per-device totals.">
+                        <span
+                          title={`When the filter last saw this device ask for anything (${absoluteTime(d.lastFilteredAt)}). Not megabytes — AdGuard sees DNS names, not traffic, and this router reports no per-device totals.`}
+                        >
                           {lastSeen(d.lastFilteredAt)}
                         </span>
                       ) : (
@@ -344,7 +364,14 @@ export default function Devices() {
                   <td style={{ whiteSpace: 'nowrap' }}>
                     {d.isOnline
                       ? <span className="badge ok">online</span>
-                      : <span className="badge muted" title={d.lastSeenAt ?? ''}>offline</span>}
+                      : (
+                        <span
+                          className="badge muted"
+                          title={`Last seen: ${absoluteTime(d.lastSeenAt)}`}
+                        >
+                          offline
+                        </span>
+                      )}
                     {/* A device can be cut off by its PROFILE rather than by
                         itself. Without saying so, the device-level Resume
                         button looks broken: it toggles a flag that isn't the
@@ -379,7 +406,13 @@ export default function Devices() {
                       </div>
                     )}
                     {!d.isOnline && (
-                      <div className="muted" style={{ fontSize: 11 }}>{lastSeen(d.lastSeenAt)}</div>
+                      <div
+                        className="muted"
+                        style={{ fontSize: 11 }}
+                        title={absoluteTime(d.lastSeenAt)}
+                      >
+                        {lastSeen(d.lastSeenAt)}
+                      </div>
                     )}
                     {d.blocked && <div><span className="badge danger">blocked</span></div>}
                   </td>
