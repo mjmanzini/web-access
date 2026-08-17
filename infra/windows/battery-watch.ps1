@@ -27,13 +27,22 @@
 param(
   [int]    $MockPercent = -1,
   [switch] $MockOnBattery,
-  [switch] $WhatIfOnly
+  [switch] $WhatIfOnly,
+  # Set when fired by the power-source-change event rather than the timer, so
+  # the first message can say "unplugged" instead of only a percentage.
+  [switch] $PowerSourceChanged
 )
 
 $ErrorActionPreference = 'Stop'
 
-# Alert at or below this, while discharging.
-$Threshold = 10
+# Warn at each of these, worst last.
+#
+# 10% alone was too late. On 2026-08-17 this machine fell from 13.4% to the
+# 5% hibernate at 0.7%/min — under seven minutes from crossing 10%, or barely
+# one tick of a five-minute timer, and that assumes somebody is looking at
+# their phone the moment it lands. 25% buys about twenty minutes, which is
+# enough to walk to the laptop.
+$Thresholds = @(25, 10)
 # Re-send at most this often when the level is not still falling.
 $RepeatMinutes = 30
 
@@ -64,17 +73,22 @@ function Get-BatteryState {
   # (partially charged) all mean mains power is attached. Anything unexpected is
   # treated as plugged in — a false silence beats crying wolf every five minutes.
   $onBattery = @(1, 4, 5) -contains [int]$b.BatteryStatus
+  # Firmware estimate; wildly optimistic on some hardware and absent on others,
+  # so it is only ever shown as a hint, never used for a decision.
+  $mins = [int]$b.EstimatedRunTime
   return @{
     Percent   = [int]$b.EstimatedChargeRemaining
     OnBattery = $onBattery
+    Minutes   = if ($mins -gt 0 -and $mins -lt 1440) { $mins } else { 0 }
     Present   = $true
   }
 }
 
 function Read-State {
-  if (-not (Test-Path $StateFile)) { return @{ alerted = $false; percent = 101; at = $null } }
+  $fresh = @{ alerted = $false; percent = 101; at = $null; tier = 0 }
+  if (-not (Test-Path $StateFile)) { return $fresh }
   try { return (Get-Content $StateFile -Raw | ConvertFrom-Json) }
-  catch { return @{ alerted = $false; percent = 101; at = $null } }
+  catch { return $fresh }
 }
 
 function Write-State($state) {
@@ -124,26 +138,42 @@ if (-not $onBattery) {
   exit 0
 }
 
-if ($percent -gt $Threshold) {
-  # Discharging but healthy. Clear any previous warning state so the next dip
-  # below the threshold alerts immediately rather than waiting out a cooldown.
-  if ($state.alerted) { Write-State @{ alerted = $false; percent = $percent; at = $null } }
-  Write-Output "On battery at $percent% — above the $Threshold% threshold."
+# The worst threshold this level has reached; 0 when still healthy.
+$tier = 0
+foreach ($t in ($Thresholds | Sort-Object -Descending)) { if ($percent -le $t) { $tier = $t } }
+
+if ($tier -eq 0) {
+  # Discharging but healthy. Say so once if we are only now unplugged, then
+  # clear any previous warning so the next dip alerts without a cooldown.
+  if ($PowerSourceChanged) {
+    $hint = if ($battery.Minutes) { " (about $($battery.Minutes) min at this rate)" } else { '' }
+    Send-Discord ":electric_plug: Home Guardian server is now on **battery** at $percent%$hint. DNS stays up until it runs out." | Out-Null
+  }
+  if ($state.alerted) { Write-State @{ alerted = $false; percent = $percent; at = $null; tier = 0 } }
+  Write-Output "On battery at $percent% — above the highest threshold ($($Thresholds[0])%)."
   exit 0
 }
 
-# Below the threshold and unplugged. Alert if this is new, if it has fallen
-# further since the last warning, or if the cooldown has elapsed.
+# Below a threshold and unplugged. Alert when this is new, when it has crossed
+# into a WORSE tier, when it has fallen further, or when the cooldown elapsed.
 $lastAt = if ($state.at) { [datetime]$state.at } else { [datetime]::MinValue }
+$lastTier = if ($null -ne $state.tier) { [int]$state.tier } else { 0 }
 $dueAgain = ((Get-Date) - $lastAt).TotalMinutes -ge $RepeatMinutes
 $fellFurther = $percent -lt [int]$state.percent
+$worseTier = $lastTier -eq 0 -or $tier -lt $lastTier
 
-if (-not $state.alerted -or $fellFurther -or $dueAgain) {
-  $msg = ":warning: **Home Guardian server battery at $percent% and unplugged** — " +
-         'plug in the laptop or the house loses DNS.'
+if (-not $state.alerted -or $worseTier -or $fellFurther -or $dueAgain) {
+  $hint = if ($battery.Minutes) { " — about **$($battery.Minutes) min** left at this rate" } else { '' }
+  $icon = if ($tier -le 10) { ':rotating_light:' } else { ':warning:' }
+  $urgency = if ($tier -le 10) {
+    "Windows hibernates it at 5%, which takes the whole house offline."
+  } else {
+    'Plug it in before it gets urgent.'
+  }
+  $msg = "$icon **Home Guardian server battery at $percent% and unplugged**$hint. $urgency"
   if (Send-Discord $msg) {
-    Write-State @{ alerted = $true; percent = $percent; at = (Get-Date).ToString('o') }
+    Write-State @{ alerted = $true; percent = $percent; at = (Get-Date).ToString('o'); tier = $tier }
   }
 } else {
-  Write-Output "Already warned at $($state.percent)% — holding until it drops or $RepeatMinutes min pass."
+  Write-Output "Already warned at $($state.percent)% (tier $lastTier) — holding until it drops or $RepeatMinutes min pass."
 }
