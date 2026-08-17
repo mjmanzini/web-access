@@ -102,7 +102,17 @@ export class BandwidthService {
     }
   }
 
-  /** Per-device totals for today plus the latest sampled rate. */
+  /**
+   * Per-device totals for today plus the latest sampled rate — for devices we
+   * genuinely have counters for.
+   *
+   * Only devices with real measurements are returned. This used to emit a row
+   * per device whether or not any bytes had ever been counted, so on hardware
+   * with no per-host counters (the Huawei B525 returns an empty set) every
+   * device displayed a confident "0 B / 0 B" — a measurement of nothing,
+   * indistinguishable from a device that genuinely used nothing. The caller
+   * now gets no row and can say something true instead.
+   */
   async summary(): Promise<BandwidthRow[]> {
     const date = new Date().toISOString().slice(0, 10);
     const [devices, todays] = await Promise.all([
@@ -110,17 +120,38 @@ export class BandwidthService {
       this.usage.find({ where: { date } }),
     ]);
     const byDevice = new Map(todays.map((u) => [u.deviceId, u]));
-    return devices.map((d) => {
+    const rows: BandwidthRow[] = [];
+    for (const d of devices) {
       const u = byDevice.get(d.id);
       const rate = this.rateByDevice.get(d.id) ?? { rx: 0, tx: 0 };
-      return {
+      const rx = u ? Number(u.rxBytes) : 0;
+      const tx = u ? Number(u.txBytes) : 0;
+      if (!rx && !tx && !rate.rx && !rate.tx) continue;
+      rows.push({
         deviceId: d.id,
         name: d.name,
-        rxBytesToday: u ? Number(u.rxBytes) : 0,
-        txBytesToday: u ? Number(u.txBytes) : 0,
+        rxBytesToday: rx,
+        txBytesToday: tx,
         rxRateBps: rate.rx,
         txRateBps: rate.tx,
-      };
-    });
+      });
+    }
+    return rows;
+  }
+
+  /**
+   * Whether this network can report per-device bytes at all.
+   *
+   * Surfaced so the dashboard can explain the absence rather than implying a
+   * device sat silent. On the B525 the answer is permanently no: HiLink counts
+   * only the LTE data session, and per-host accounting does not exist.
+   */
+  async countersAvailable(): Promise<boolean> {
+    if (!this.router.isEnabled()) return false;
+    try {
+      return (await this.router.getBandwidth()).length > 0;
+    } catch {
+      return false;
+    }
   }
 }

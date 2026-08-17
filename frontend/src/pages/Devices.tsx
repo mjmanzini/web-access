@@ -381,7 +381,11 @@ export default function Devices() {
         <table>
           <thead>
             <tr>
-              <th>Device</th><th>Identity</th><th>Active today</th><th>Profile</th><th>Status</th><th></th>
+              <th>Device</th><th>Identity</th>
+              <th title="DNS requests today. Not megabytes — see the note below the table.">
+                Activity today
+              </th>
+              <th>Profile</th><th>Status</th><th></th>
             </tr>
           </thead>
           <tbody>
@@ -464,11 +468,24 @@ export default function Devices() {
                             <div style={{ fontSize: 11 }}>{formatRate(bandwidth[d.id].rxRateBps)} ↓</div>
                           )}
                         </>
-                      : d.lastFilteredAt ? (
+                      : (d.queriesToday ?? 0) > 0 ? (
                         <span
-                          title={`When the filter last saw this device ask for anything (${absoluteTime(d.lastFilteredAt)}). Not megabytes — AdGuard sees DNS names, not traffic, and this router reports no per-device totals.`}
+                          title={
+                            'Requests this device made today, and how many were blocked. ' +
+                            'Not megabytes: this router keeps no per-device byte counters, ' +
+                            'and DNS sees names rather than traffic.'
+                          }
                         >
-                          {lastSeen(d.lastFilteredAt)}
+                          {(d.queriesToday ?? 0).toLocaleString()} requests
+                          {(d.blockedToday ?? 0) > 0 && (
+                            <div style={{ fontSize: 11 }}>{(d.blockedToday ?? 0).toLocaleString()} blocked</div>
+                          )}
+                        </span>
+                      ) : d.lastFilteredAt ? (
+                        <span
+                          title={`Nothing today. The filter last saw this device ask for something ${absoluteTime(d.lastFilteredAt)}.`}
+                        >
+                          none today
                         </span>
                       ) : (
                         '—'
@@ -620,6 +637,20 @@ export default function Devices() {
             )}
           </tbody>
         </table>
+      </div>
+
+      {/* Said plainly and in one place, because it is the question everyone
+          asks of a page like this. Better here than implied by a column of
+          confident zeros. */}
+      <div className="muted" style={{ fontSize: 11, lineHeight: 1.6, marginTop: 12 }}>
+        <strong>Why there are no megabytes here.</strong> Data usage is measured by
+        whatever the traffic passes through, and this network's router — a Huawei
+        B525 — only counts bytes on its mobile connection. There is no SIM in it:
+        the internet arrives through its Ethernet WAN port, which it does not
+        meter at all, and it keeps no per-device counters in any case. So neither
+        household GB nor per-device GB can be read from it, and inventing a
+        number would be worse than not showing one. What is counted above is real:
+        every DNS request each device made today.
       </div>
     </>
   );

@@ -46,6 +46,10 @@ export interface Device {
   lastFilteredAt?: string | null;
   /** False when the device is online but resolving somewhere other than us. */
   usingFilter?: boolean;
+  /** DNS requests this device made today, and how many were blocked. This is
+   *  the honest per-device metric here — the router has no byte counters. */
+  queriesToday?: number;
+  blockedToday?: number;
   blocked: boolean;
   profileId: string | null;
 

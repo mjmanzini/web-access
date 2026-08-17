@@ -99,6 +99,8 @@ export class DevicesService implements OnModuleInit {
       Device & {
         lastFilteredAt: string | null;
         usingFilter: boolean;
+        queriesToday: number;
+        blockedToday: number;
         vendorLabel: string;
         vendorKnown: boolean;
         macPrivate: boolean;
@@ -126,8 +128,40 @@ export class DevicesService implements OnModuleInit {
 
     const cutoff = Date.now() - DevicesService.FILTER_SILENCE_MINUTES * 60_000;
 
+    // What each device did today. This is the honest per-device metric on this
+    // hardware: the B525 has no per-host byte counters, so the "Today" column
+    // showed 0 B / 0 B for every device forever. Requests and blocks are real,
+    // measured, and actually answer "what has this device been up to".
+    const startOfDay = new Date();
+    startOfDay.setHours(0, 0, 0, 0);
+    const today = await this.activity
+      .createQueryBuilder('a')
+      .select('a.clientIp', 'ip')
+      .addSelect('COUNT(*)', 'queries')
+      .addSelect("COUNT(*) FILTER (WHERE a.action = 'blocked')", 'blocked')
+      .where('a.timestamp >= :start', { start: startOfDay })
+      .groupBy('a.clientIp')
+      .getRawMany<{ ip: string; queries: string; blocked: string }>();
+    const todayByIp = new Map(today.map((r) => [r.ip, r]));
+
+    // Every address each device answers to. A merged device's queries still
+    // arrive from the address it was merged FROM — this phone holds .60 and
+    // .103 at once — so attributing activity to the primary address alone
+    // reports a busy phone as having done nothing all day.
+    const aliasIps = new Map<string, string[]>();
+    for (const a of await this.aliases.find()) {
+      if (!a.key.startsWith('ip:')) continue;
+      const ip = a.key.slice(3);
+      aliasIps.set(a.deviceId, [...(aliasIps.get(a.deviceId) ?? []), ip]);
+    }
+
     return devices.map((d) => {
-      const last = lastByIp.get(d.ipAddress) ?? null;
+      // Its own address plus anything merged into it.
+      const addresses = [d.ipAddress, ...(aliasIps.get(d.id) ?? [])].filter(Boolean);
+      const last = addresses
+        .map((ip) => lastByIp.get(ip))
+        .filter((v): v is Date => !!v)
+        .sort((a, b) => b.getTime() - a.getTime())[0] ?? null;
       // A resolved query is proof the device was here at that instant —
       // stronger evidence than the router's table, which lags by minutes and
       // had a phone marked absent half an hour after it last asked us for a
@@ -141,8 +175,11 @@ export class DevicesService implements OnModuleInit {
       // the day it was discovered.
       const vendor = vendorLabel(d.macAddress, d.vendor);
       const decoded = decodeModel(d.hostname ?? d.name);
+      const t = addresses.map((ip) => todayByIp.get(ip)).filter(Boolean);
       return Object.assign(d, {
         lastSeenAt: seen ?? null,
+        queriesToday: t.reduce((n, r) => n + Number(r!.queries), 0),
+        blockedToday: t.reduce((n, r) => n + Number(r!.blocked), 0),
         vendorLabel: vendor.text,
         vendorKnown: vendor.known,
         macPrivate: vendor.private,
