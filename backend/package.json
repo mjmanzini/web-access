@@ -10,7 +10,8 @@
     "start:prod": "node dist/main.js",
     "lint": "eslint \"src/**/*.ts\" --fix",
     "test": "jest --passWithNoTests",
-    "oui:refresh": "node scripts/build-oui.js"
+    "oui:refresh": "node scripts/build-oui.js",
+    "bedside:build": "node scripts/build-bedside-client.js"
   },
   "jest": {
     "preset": "ts-jest",

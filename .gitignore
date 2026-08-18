@@ -3,6 +3,7 @@
 .env.*
 !.env.example
 ADMIN_PASSWORD.txt
+.hgtok
 .env*.local
 
 # Keys, certificates, and credential material (never commit)
@@ -33,6 +34,7 @@ pnpm-debug.log*
 
 # TypeScript generated output
 *.tsbuildinfo
+backend/src/portal/client/out/
 
 # OS/editor noise
 .DS_Store

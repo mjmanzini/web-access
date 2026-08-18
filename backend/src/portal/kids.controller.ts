@@ -15,6 +15,7 @@ import { IsObject, IsOptional, IsString } from 'class-validator';
 import { Public } from '../auth/public.decorator';
 import { PushService } from '../push/push.service';
 import { DeviceIdentityService } from './device-identity.service';
+import { BEDSIDE_CLIENT_JS } from './client/bedside-mode.generated';
 import { PortalService } from './portal.service';
 
 class KidSubscribeDto {
@@ -71,6 +72,17 @@ export class KidsController {
             purpose: 'maskable',
           },
         ],
+        // A long-press on the installed icon jumps straight to bedside mode —
+        // a second entry point alongside the button on the status page,
+        // useful once a family actually adopts the nightstand habit.
+        shortcuts: [
+          {
+            name: 'Bedside mode',
+            short_name: 'Bedside',
+            url: '/bedside',
+            icons: [{ src: '/kids/icon-192.png', sizes: '192x192', type: 'image/png' }],
+          },
+        ],
       },
       null,
       2,
@@ -89,6 +101,23 @@ export class KidsController {
   @Header('Service-Worker-Allowed', '/')
   serviceWorker(): string {
     return KIDS_SW;
+  }
+
+  /**
+   * The bedside-mode client — the one piece of this app authored in strict
+   * TypeScript and compiled ahead of time (`npm run bedside:build`), served
+   * as a plain string exactly like the service worker above. `no-cache` (not
+   * `no-store`): a conditional GET still saves the transfer, and this is the
+   * one script on the page that should never run stale after a deploy — a
+   * cached wake-lock bug staying on a nightstand overnight is the wrong kind
+   * of durable.
+   */
+  @Public()
+  @Get('bedside.js')
+  @Header('Content-Type', 'application/javascript; charset=utf-8')
+  @Header('Cache-Control', 'no-cache')
+  bedsideClient(): string {
+    return BEDSIDE_CLIENT_JS;
   }
 
   @Public()

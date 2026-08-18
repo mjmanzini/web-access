@@ -84,6 +84,36 @@ export class PortalController {
   }
 
   /**
+   * Bedside mode: a big clock a child can leave on a nightstand, dim enough
+   * not to light a dark room, that switches itself to the 🌙 bedtime screen
+   * the moment `/status/stream` says bedtime started and hands the screen
+   * back the moment it ends.
+   *
+   * Server-rendered shell, same as `/status` — but everything that makes
+   * this page do anything (the clock, the wake lock, the live state) needs
+   * JavaScript, so unlike `/status` this one page cannot promise to work
+   * without it. That is why it lives on its own route behind an explicit
+   * button rather than folding into the no-JS-required status page.
+   */
+  @Public()
+  @Get('bedside')
+  @Header('Content-Type', 'text/html; charset=utf-8')
+  @Header('Cache-Control', 'no-store')
+  @Header('X-Frame-Options', 'DENY')
+  @Header('Referrer-Policy', 'no-referrer')
+  bedside(@Req() req: Request, @Res({ passthrough: true }) res: Response): string | undefined {
+    // The Wake Lock API refuses to run outside a secure context, so the same
+    // HTTP→HTTPS redirect the status page uses applies here — doubly so,
+    // since a plain-HTTP bedside page would silently never hold the screen.
+    const https = this.kidsOrigin();
+    if (https && req.headers.host !== https.host) {
+      res.redirect(302, `${https.origin}/bedside`);
+      return undefined;
+    }
+    return renderBedside();
+  }
+
+  /**
    * Live state, over Server-Sent Events.
    *
    * The page used to lean on a 60-second meta refresh, which meant bedtime
@@ -111,7 +141,11 @@ export class PortalController {
         const key = `${status.state}|${status.until ?? ''}|${status.headline}`;
         if (key !== last) {
           last = key;
-          res.write(`event: state\ndata: ${JSON.stringify({ key })}\n\n`);
+          // The full status rides along so bedside mode can update in place.
+          // Reloading the page would drop the wake lock, exit fullscreen and
+          // restart the clock — fine for the ordinary view, useless for a
+          // screen meant to stay exactly where it is.
+          res.write(`event: state\ndata: ${JSON.stringify({ key, status })}\n\n`);
         } else {
           res.write(': keep-alive\n\n'); // stops idle connections being reaped
         }
@@ -170,6 +204,134 @@ function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string,
   );
+}
+
+/**
+ * Bedside mode: a static shell, deliberately near-black.
+ *
+ * Nothing here depends on server-computed state — the status is entirely
+ * SSE/poll-driven client-side (see bedside-mode.ts), so this function takes
+ * no arguments and every child on the network gets byte-identical markup.
+ * That is also why it is safe to cache more aggressively than /status
+ * upstream — the header on the route stays no-store anyway, since a stale
+ * *shell* is harmless but a browser-cached one still isn't worth the risk on
+ * a page that exists to be trusted.
+ *
+ * The two screens (`#start-overlay`, `#bedside-main`) and the two states
+ * inside `#bedside-main` (plain clock vs `#bedtime-banner`) are pure CSS,
+ * switched by bedside-mode.ts setting `hidden` and `data-mode` on <body> —
+ * see that file for why: the DOM attribute IS the state machine, not a
+ * shadow copy of it that could drift.
+ */
+function renderBedside(): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+<meta name="color-scheme" content="dark" />
+<link rel="manifest" href="/kids/manifest.webmanifest" />
+<meta name="theme-color" content="#000000" />
+<meta name="mobile-web-app-capable" content="yes" />
+<link rel="apple-touch-icon" href="/kids/icon-192.png" />
+<title>Bedside mode</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    /* True near-black, not a dark gray: on an OLED tablet every lit pixel
+       costs battery, and this screen is meant to run all night. No
+       gradients, no animation — a bedside display should be still. */
+    background: #000;
+    color: #c7cede;
+    font: 18px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    display: grid; place-items: center;
+    -webkit-user-select: none; user-select: none;
+    overscroll-behavior: none;
+  }
+
+  #start-overlay {
+    display: grid; place-items: center; gap: 18px; text-align: center;
+    padding: 24px; max-width: 420px;
+  }
+  #start-overlay .moon { font-size: 64px; }
+  #start-overlay h1 { margin: 0; font-size: 26px; color: #e7ecf5; }
+  #start-overlay p { margin: 0; color: #8a93ab; font-size: 15px; }
+  .btn {
+    display: inline-block; padding: 16px 28px; border-radius: 16px;
+    background: #2a2f45; color: #e7ecf5; font-weight: 700; font-size: 18px;
+    border: none; min-height: 54px; text-decoration: none;
+  }
+  .exit-link {
+    color: #6b7793; font-size: 13px; text-decoration: none; padding: 8px;
+  }
+
+  #bedside-main {
+    display: grid; place-items: center; gap: clamp(16px, 4vh, 40px);
+    width: 100%; height: 100%; padding: 24px;
+  }
+  #clock {
+    font: 700 clamp(72px, 22vw, 220px)/1 'Segoe UI', system-ui, sans-serif;
+    font-variant-numeric: tabular-nums;
+    color: #8892ab; /* dim on purpose — a bedside clock is read, not stared at */
+    letter-spacing: 2px;
+  }
+  body[data-mode="triggered"] #clock { color: #4a5169; }
+
+  #bedtime-banner {
+    display: grid; gap: 10px; text-align: center; max-width: 32ch;
+  }
+  #bedtime-emoji { font-size: clamp(48px, 12vh, 96px); line-height: 1; }
+  #bedtime-headline { font-size: clamp(22px, 5vw, 34px); font-weight: 800; color: #b3a6ff; margin: 0; }
+  #bedtime-detail { font-size: clamp(14px, 2.4vw, 18px); color: #9098b3; margin: 0; }
+  #bedtime-until {
+    font-size: 15px; color: #cfd4e6; background: rgba(255,255,255,.06);
+    border-radius: 999px; padding: 8px 16px; display: inline-block;
+  }
+
+  #status-strip {
+    position: fixed; left: 0; right: 0; bottom: env(safe-area-inset-bottom, 0);
+    display: flex; align-items: center; justify-content: center; gap: 14px;
+    padding: 10px; font-size: 12px; color: #565e77;
+  }
+  #status-strip .dot { opacity: .8; }
+  #status-strip a { color: #565e77; }
+
+  @media (prefers-reduced-motion: no-preference) {
+    /* Deliberately nothing here. Every other page in this app has a small
+       float/pulse animation; this one does not, on purpose — see the
+       comment on the body background above. */
+  }
+</style>
+</head>
+<body>
+  <div id="start-overlay">
+    <div class="moon">🌙</div>
+    <h1>Bedside mode</h1>
+    <p>Keeps this screen on, dim, and shows you when bedtime starts — leave the tablet propped up and it does the rest.</p>
+    <button id="start-btn" class="btn">Start</button>
+    <a class="exit-link" href="/status">Back to the internet page</a>
+  </div>
+
+  <main id="bedside-main" hidden>
+    <div id="clock">--:--</div>
+    <div id="bedtime-banner" hidden>
+      <div id="bedtime-emoji">🌙</div>
+      <h2 id="bedtime-headline"></h2>
+      <p id="bedtime-detail"></p>
+      <div id="bedtime-until" hidden></div>
+    </div>
+    <div id="status-strip">
+      <span id="badge-lock" class="dot">🔓</span>
+      <span id="badge-conn" class="dot">📡</span>
+      <a id="exit-btn" href="/status">Exit</a>
+    </div>
+  </main>
+
+  <script src="/kids/bedside.js" defer></script>
+</body>
+</html>`;
 }
 
 /** Shared chrome for the small standalone pages (pair / expired). */
@@ -327,6 +489,7 @@ function render(s: PortalStatus): string {
     <div class="actions">
       <a class="btn${offline ? '' : ' calm'}" href="/request">Ask for a website</a>
       <button id="notify" class="btn calm" hidden>Tell me before bedtime</button>
+      <a class="btn calm" href="/bedside">🌙 Bedside mode</a>
     </div>
     <div id="notice" class="hint"></div>
   </div>
