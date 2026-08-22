@@ -326,6 +326,134 @@ function useStatusFeed(
   };
 }
 
+// ---- push subscription --------------------------------------------------
+
+/** Mirrors the response of `GET /kids/push-config` (see `kids.controller.ts`). */
+interface PushConfig {
+  enabled: boolean;
+  publicKey: string | null;
+  deviceKnown: boolean;
+  subscribed: boolean;
+}
+
+function isPushConfig(v: unknown): v is PushConfig {
+  if (typeof v !== 'object' || v === null) return false;
+  const o = v as Record<string, unknown>;
+  return typeof o.enabled === 'boolean' && typeof o.deviceKnown === 'boolean';
+}
+
+/**
+ * VAPID keys arrive base64url; `applicationServerKey` wants raw bytes.
+ *
+ * Returns the ArrayBuffer rather than the Uint8Array view over it. Both
+ * satisfy `BufferSource` at runtime, but since TypeScript 5.7 `Uint8Array` is
+ * generic in its backing buffer and the plain `Uint8Array.from(...)` inference
+ * widens to `ArrayBufferLike` — which includes `SharedArrayBuffer` and so no
+ * longer matches the DOM signature. Handing back the buffer sidesteps the
+ * question entirely and works on either side of that TS version boundary.
+ */
+function decodeVapidKey(key: string): ArrayBuffer {
+  const pad = '='.repeat((4 - (key.length % 4)) % 4);
+  const raw = atob((key + pad).replace(/-/g, '+').replace(/_/g, '/'));
+  const buf = new ArrayBuffer(raw.length);
+  const view = new Uint8Array(buf);
+  for (let i = 0; i < raw.length; i++) view[i] = raw.charCodeAt(i);
+  return buf;
+}
+
+/**
+ * Registers this tablet for its own bedtime push.
+ *
+ * Two entry points, and the difference between them matters:
+ *
+ *  - `resume()` runs on load. It subscribes *silently* and only when
+ *    permission was already granted — re-subscribing matters because browsers
+ *    rotate push endpoints on their own, and a nightstand tablet that has not
+ *    been opened in weeks would otherwise go quiet with nothing on screen to
+ *    say so. It never prompts.
+ *  - `request()` runs from the Start tap. Asking for notification permission
+ *    outside a user gesture is refused outright by some browsers and silently
+ *    penalised by others, so the one prompt this page shows is attached to
+ *    the one deliberate tap it already has.
+ *
+ * The POST goes to `/kids/subscribe`, not the parent dashboard's
+ * `/push/subscribe`: this page has no login, and the kid endpoint binds the
+ * subscription to whichever device owns the requesting IP. Posting to the
+ * parent route from here would simply 401.
+ *
+ * Every failure path is silent. A tablet that cannot be notified is still a
+ * working clock, and an error message on a bedside screen at 3am helps nobody.
+ */
+function usePush(onState: (subscribed: boolean) => void): {
+  resume: () => void;
+  request: () => void;
+} {
+  const supported =
+    'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+
+  const loadConfig = (): Promise<PushConfig | null> =>
+    fetch('/kids/push-config', { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((j: unknown) => (isPushConfig(j) ? j : null))
+      .catch(() => null);
+
+  const subscribeWith = (cfg: PushConfig): Promise<void> => {
+    const key = cfg.publicKey;
+    if (!key) return Promise.resolve();
+    return navigator.serviceWorker
+      .register('/kids/sw.js', { scope: '/' })
+      .then((reg) => navigator.serviceWorker.ready.then(() => reg))
+      .then((reg) =>
+        // An existing subscription is reused rather than replaced: calling
+        // subscribe() again with the same key returns it, but going through
+        // getSubscription() first avoids churning the endpoint (and the DB
+        // row) on every single page load.
+        reg.pushManager.getSubscription().then(
+          (existing) =>
+            existing ??
+            reg.pushManager.subscribe({
+              userVisibleOnly: true,
+              applicationServerKey: decodeVapidKey(key),
+            }),
+        ),
+      )
+      .then((sub) =>
+        fetch('/kids/subscribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(sub.toJSON()),
+        }),
+      )
+      .then((r) => r.json())
+      .then((out: unknown) => {
+        // `{ ok: false, reason: 'device-not-recognised' }` is a normal answer
+        // here, not an error: a tablet a parent has not adopted yet simply
+        // has nothing to be notified about.
+        onState(typeof out === 'object' && out !== null && (out as Record<string, unknown>).ok === true);
+      })
+      .catch(() => onState(false));
+  };
+
+  const run = (interactive: boolean): void => {
+    if (!supported) return;
+    void loadConfig().then((cfg) => {
+      // `deviceKnown` false means this IP maps to no device a parent has set
+      // up. Nothing to subscribe to, and nothing worth saying about it here.
+      if (!cfg || !cfg.enabled || !cfg.publicKey || !cfg.deviceKnown) return;
+      if (Notification.permission === 'granted') return subscribeWith(cfg);
+      if (!interactive || Notification.permission === 'denied') return;
+      return Notification.requestPermission()
+        .then((perm) => (perm === 'granted' ? subscribeWith(cfg) : undefined))
+        .catch(() => undefined);
+    });
+  };
+
+  return {
+    resume: () => run(false),
+    request: () => run(true),
+  };
+}
+
 // ---- state machine + wiring --------------------------------------------------
 
 type BedsideMode = 'idle' | 'monitoring' | 'triggered' | 'error';
@@ -343,6 +471,9 @@ interface Dom {
   lockBadge: HTMLElement;
   connBadge: HTMLElement;
   exitBtn: HTMLElement;
+  sleep: HTMLElement;
+  sleepText: HTMLElement;
+  sleepDismiss: HTMLButtonElement;
 }
 
 function requireEl<T extends HTMLElement>(id: string): T {
@@ -373,12 +504,23 @@ function initBedsideMode(): void {
     lockBadge: requireEl('badge-lock'),
     connBadge: requireEl('badge-conn'),
     exitBtn: requireEl('exit-btn'),
+    sleep: requireEl('sleep-screen'),
+    sleepText: requireEl('sleep-text'),
+    sleepDismiss: requireEl<HTMLButtonElement>('sleep-dismiss'),
   };
 
   let mode: BedsideMode = 'idle';
   let everConnected = false;
   let clockDispose: Dispose | null = null;
   let statusDispose: Dispose | null = null;
+  /**
+   * Which bedtime occurrence a parent has already dismissed the sleep screen
+   * for. Keyed by the window rather than a bare boolean, so dismissing tonight
+   * does not also suppress tomorrow night — and so the 3s status poll cannot
+   * re-raise the screen a second after it was waved away.
+   */
+  let dismissedFor: string | null = null;
+  let lastStatus: PortalStatus | null = null;
 
   const setMode = (next: BedsideMode): void => {
     mode = next;
@@ -390,8 +532,35 @@ function initBedsideMode(): void {
     dom.lockBadge.title = detail;
   });
   const fullscreen = useFullscreen();
+  const push = usePush(() => undefined);
+  // Silent re-subscribe on every load, so a rotated endpoint heals itself
+  // without anyone having to notice it broke. Never prompts — see usePush().
+  push.resume();
+
+  /**
+   * The sleep screen — the thing a notification tap is meant to land on.
+   *
+   * Reserved for `bedtime` alone. Quota and a parent pause are also "off", and
+   * they get the banner below, but neither of them means "go to sleep"; a
+   * child who has used up their hour at 4pm should not be told it is night.
+   */
+  const applySleepScreen = (s: PortalStatus): void => {
+    const key = `${s.state}|${s.until ?? ''}`;
+    const show = s.state === 'bedtime' && dismissedFor !== key;
+    if (show) {
+      const who = (s.profileName ?? '').trim();
+      dom.sleepText.textContent = who ? `Time to sleep, ${who} 🌙` : 'Time to sleep 🌙';
+    }
+    dom.sleep.hidden = !show;
+    // Drives the CSS (and the animation) from the DOM, for the same reason
+    // `data-mode` exists: one source of truth for what the screen is doing.
+    document.body.classList.toggle('bedtime-triggered', show);
+    if (s.state !== 'bedtime') dismissedFor = null; // bedtime ended; re-arm
+  };
 
   const applyStatus = (s: PortalStatus): void => {
+    lastStatus = s;
+    applySleepScreen(s);
     const offline = isOfflineState(s.state);
     if (offline) {
       setMode('triggered');
@@ -434,6 +603,10 @@ function initBedsideMode(): void {
     wakeLock.hold();
     fullscreen.enter(); // must run inside this click handler — see useFullscreen()
 
+    // Inside the tap, for the same reason: this is where the notification
+    // permission prompt is allowed to appear.
+    push.request();
+
     clockDispose = useClock(dom.clock);
     statusDispose = useStatusFeed(applyStatus, applyConnectivity);
   };
@@ -447,6 +620,18 @@ function initBedsideMode(): void {
     statusDispose = null;
   };
 
+  /**
+   * Soft dismiss, aimed at a parent standing over the tablet — not an escape
+   * hatch. It clears the sleep screen for tonight only, and changes nothing
+   * about enforcement: the internet stays off either way. That separation is
+   * the point. A button that looked like it ended bedtime would be a lie.
+   */
+  dom.sleepDismiss.addEventListener('click', () => {
+    if (lastStatus) dismissedFor = `${lastStatus.state}|${lastStatus.until ?? ''}`;
+    dom.sleep.hidden = true;
+    document.body.classList.remove('bedtime-triggered');
+  });
+
   dom.startBtn.addEventListener('click', start);
   // Explicit exit, not just "wait for navigation": drops fullscreen and the
   // wake lock immediately rather than leaving them for the browser to notice.
@@ -458,6 +643,17 @@ function initBedsideMode(): void {
   // here noticeably slower for no benefit — pagehide already covers the
   // real cleanup need (no leaked timers, no dangling wake lock).
   window.addEventListener('pagehide', stop);
+
+  // Arriving by tapping the bedtime notification (see
+  // PushService.sendBedtimeNotification, which sends `/bedside?from=push`).
+  // Skip the Start prompt: the tap already WAS the decision, and making a
+  // child find a second button on a screen that just said "go to sleep" would
+  // be absurd. The wake lock and fullscreen may or may not be granted without
+  // a gesture — both already fail silently, and the sleep screen does not
+  // depend on either.
+  if (window.location.search.indexOf('from=push') !== -1) {
+    start();
+  }
 }
 
 if (document.readyState === 'loading') {

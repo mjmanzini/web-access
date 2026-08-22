@@ -212,20 +212,27 @@ export class ProfilesService {
     const deviceIds = (profile.devices ?? []).map((d) => d.id);
     if (!deviceIds.length) return;
 
+    // Bedtime is the one case that gets its own message and its own landing
+    // page — addressed to the child by name, opening bedside mode rather than
+    // the explanation page. See PushService.sendBedtimeNotification(); the
+    // wording lives there so this method stays a router, not a copywriter.
+    if (reason === 'bedtime') {
+      try {
+        await this.push.sendBedtimeNotification(deviceIds, {
+          name: profile.name,
+          until: this.currentBedtimeEnd(profile),
+        });
+      } catch (err) {
+        this.logger.warn(`bedtime notification failed: ${(err as Error).message}`);
+      }
+      return;
+    }
+
     let title: string;
     let body: string;
     if (reason === null) {
       title = 'Internet is back on';
       body = 'You’re good to go.';
-    } else if (reason === 'bedtime') {
-      const until = this.currentBedtimeEnd(profile);
-      // Leads with the fact and the instruction, because on a lock screen the
-      // title may be all that is read. Apps sitting there buffering is the
-      // symptom this has to explain.
-      title = 'Internet is off — tap to see why';
-      body = until
-        ? `Bedtime. It comes back on at ${until} by itself.`
-        : 'Bedtime. It comes back on by itself.';
     } else if (reason === 'quota_exceeded') {
       title = 'Internet is off — tap to see why';
       body = 'That’s all of today’s internet time. It resets tomorrow morning.';

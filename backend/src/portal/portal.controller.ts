@@ -298,10 +298,67 @@ function renderBedside(): string {
   #status-strip .dot { opacity: .8; }
   #status-strip a { color: #565e77; }
 
+  /* ---- the sleep screen ------------------------------------------------
+     Shown only for bedtime (not quota, not a parent pause) and only over the
+     top of everything else, because it is what a tapped notification lands
+     on. Position:fixed rather than a sibling of the clock so it covers the
+     status strip too — at that moment there is nothing else worth reading. */
+  #sleep-screen {
+    position: fixed; inset: 0; z-index: 10;
+    display: grid; place-items: center; align-content: center; gap: 28px;
+    background: #000; text-align: center; padding: 24px;
+  }
+  #sleep-screen[hidden] { display: none; }
+
+  #sleep-sky { position: relative; width: min(60vw, 240px); height: min(60vw, 240px); }
+  #sleep-moon {
+    position: absolute; inset: 0; display: grid; place-items: center;
+    font-size: min(34vw, 140px); line-height: 1;
+  }
+  #sleep-sky .star {
+    position: absolute; color: #cfd6ee; font-size: 14px; opacity: .25;
+  }
+  /* Scattered by hand rather than randomly, so the layout is identical on
+     every device and can be eyeballed once. */
+  #sleep-sky .s1 { top: 4%;  left: 10%; }
+  #sleep-sky .s2 { top: 16%; right: 4%;  font-size: 10px; }
+  #sleep-sky .s3 { bottom: 12%; left: 2%; font-size: 11px; }
+  #sleep-sky .s4 { bottom: 2%; right: 16%; }
+  #sleep-sky .s5 { top: 46%; right: -2%; font-size: 9px; }
+
+  #sleep-text {
+    margin: 0; font-size: clamp(24px, 6vw, 44px); font-weight: 800;
+    color: #b3a6ff; max-width: 18ch;
+  }
+  #sleep-sub { margin: 0; color: #5b6480; font-size: 14px; }
+  #sleep-dismiss {
+    background: none; border: 1px solid #232839; color: #4d5573;
+    border-radius: 999px; padding: 10px 20px; font-size: 13px;
+    min-height: 44px; margin-top: 8px;
+  }
+
   @media (prefers-reduced-motion: no-preference) {
-    /* Deliberately nothing here. Every other page in this app has a small
-       float/pulse animation; this one does not, on purpose — see the
-       comment on the body background above. */
+    /* The one exception to this page's no-animation rule (see the body
+       background above). It earns its place: the drift IS the message — a
+       still moon is a picture, a slowly breathing one is something to fall
+       asleep to. Kept honest about the cost it was avoiding — 12s and 20s
+       cycles on two small elements, transform and opacity only, so it stays
+       on the compositor and never repaints the near-black backdrop that
+       makes this cheap on an OLED panel in the first place. */
+    #sleep-moon { animation: sleep-drift 12s ease-in-out infinite; }
+    #sleep-sky .star { animation: sleep-twinkle 20s ease-in-out infinite; }
+    #sleep-sky .s2 { animation-delay: -4s; }
+    #sleep-sky .s3 { animation-delay: -8s; }
+    #sleep-sky .s4 { animation-delay: -12s; }
+    #sleep-sky .s5 { animation-delay: -16s; }
+  }
+  @keyframes sleep-drift {
+    0%, 100% { transform: translateY(0) rotate(-3deg); }
+    50%      { transform: translateY(-10px) rotate(3deg); }
+  }
+  @keyframes sleep-twinkle {
+    0%, 100% { opacity: .15; }
+    50%      { opacity: .55; }
   }
 </style>
 </head>
@@ -328,6 +385,22 @@ function renderBedside(): string {
       <a id="exit-btn" href="/status">Exit</a>
     </div>
   </main>
+
+  <!-- Bedtime. Outside <main> because it covers the whole screen including
+       the status strip; hidden until bedside-mode.ts says otherwise. -->
+  <div id="sleep-screen" hidden>
+    <div id="sleep-sky" aria-hidden="true">
+      <span class="star s1">✦</span>
+      <span class="star s2">✦</span>
+      <span class="star s3">✧</span>
+      <span class="star s4">✦</span>
+      <span class="star s5">✧</span>
+      <div id="sleep-moon">🌙</div>
+    </div>
+    <h2 id="sleep-text">Time to sleep 🌙</h2>
+    <p id="sleep-sub">The internet comes back on by itself in the morning.</p>
+    <button id="sleep-dismiss" type="button">Dismiss</button>
+  </div>
 
   <script src="/kids/bedside.js" defer></script>
 </body>

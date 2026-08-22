@@ -148,6 +148,45 @@ export class PushService implements OnModuleInit {
     return this.deliver(await this.subs.find({ where: { deviceId: In(deviceIds) } }), payload);
   }
 
+  /**
+   * The one notification bedtime is allowed to be loud about.
+   *
+   * Split out from the general `sendToDevices()` so the wording, the urgency
+   * and — most importantly — the landing page are decided in exactly one
+   * place. Every other kid notification opens `/status`; this one opens
+   * bedside mode, because the point of tapping it is to put the tablet down
+   * showing a clock, not to read an explanation.
+   *
+   * `requireInteraction` is as close as the web platform gets to "cannot be
+   * swiped away": it stops the notification auto-dismissing after a few
+   * seconds, so it sits over YouTube until it is dealt with. A determined
+   * child can still swipe it off — no web API can prevent that, and the
+   * enforcement that actually stops the internet does not depend on this
+   * message being seen.
+   */
+  async sendBedtimeNotification(
+    deviceIds: string[],
+    opts: { name?: string | null; until?: string | null } = {},
+  ): Promise<number> {
+    const who = (opts.name ?? '').trim();
+    return this.sendToDevices(deviceIds, {
+      title: who ? `Bedtime, ${who}! 🌙` : 'Bedtime! 🌙',
+      // The end time rides along because it is the one fact that turns this
+      // from an order into an arrangement — "back on at 06:30" is the
+      // difference between a child waiting and a child arguing.
+      body: opts.until ? `Time to sleep 😴 — back on at ${opts.until}.` : 'Time to sleep 😴',
+      // ?from=push tells bedside mode it was launched by this tap, so it opens
+      // straight into the sleep screen instead of the Start prompt.
+      url: '/bedside?from=push',
+      // Same tag as the other state messages: "internet is back on" should
+      // replace this one in the shade, not stack underneath it.
+      tag: 'kids-state',
+      requireInteraction: true,
+      vibrate: [300, 120, 300, 120, 300],
+      urgent: true,
+    });
+  }
+
   /** How many child devices have notifications switched on. */
   async countForDevice(deviceId: string): Promise<number> {
     return this.subs.count({ where: { deviceId } });
